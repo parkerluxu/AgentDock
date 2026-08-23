@@ -1,0 +1,33 @@
+{
+  "name": "agentdock",
+  "version": "0.1.0-dev",
+  "description": "Local-first control plane for multi-runtime AI agents.",
+  "type": "module",
+  "bin": {
+    "agentdock": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "schemas",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "config:validate": "tsx src/cli.ts config validate"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

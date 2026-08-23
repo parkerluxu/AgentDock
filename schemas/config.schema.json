@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentdock.dev/schema/config.v1.json",
+  "title": "AgentDock configuration",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "version": { "const": 1 },
+    "dataDir": { "type": "string", "minLength": 1 },
+    "runtimes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "adapter"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "adapter": { "type": "string", "minLength": 1 },
+          "binary": { "type": "string", "minLength": 1 },
+          "args": { "type": "array", "items": { "type": "string" } },
+          "version": { "type": "string" },
+          "enabled": { "type": "boolean" },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["execute", "stream_events", "cancel", "create_session", "resume_session", "healthcheck"]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "runtimeId", "policyId"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "runtimeId": { "type": "string", "minLength": 1 },
+          "policyId": { "type": "string", "minLength": 1 },
+          "extends": { "type": "string" },
+          "settings": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "rootDir"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "rootDir": { "type": "string", "minLength": 1 },
+          "profileIds": { "type": "array", "items": { "type": "string" } },
+          "defaultProfileId": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "filesystem", "environment", "network"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "filesystem": {
+            "type": "object",
+            "required": ["roots", "write"],
+            "properties": {
+              "roots": { "type": "array", "items": { "type": "string" } },
+              "write": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
+          "environment": {
+            "type": "object",
+            "required": ["allow"],
+            "properties": {
+              "allow": { "type": "array", "items": { "type": "string" } }
+            },
+            "additionalProperties": false
+          },
+          "network": { "type": "string", "enum": ["deny", "allow"] }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
