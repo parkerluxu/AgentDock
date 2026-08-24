@@ -21,6 +21,25 @@ describe("execution context", () => {
     expect(formatDryRun(context, "inspect")).toMatchObject({ executes: false, task: "inspect" });
   });
 
+  it("resolves Windows-configured paths consistently when running on Linux", () => {
+    const config = validateConfig({
+      version: 1,
+      runtimes: [{ id: "codex", adapter: "codex", capabilities: ["execute"] }],
+      policies: [{ id: "readonly", filesystem: { roots: ["C:/workspace"] }, environment: {} }],
+      profiles: [{ id: "review", runtimeId: "codex", policyId: "readonly" }],
+      projects: [{ id: "app", rootDir: ".", profileIds: ["review"], defaultProfileId: "review" }],
+    });
+
+    const context = resolveExecutionContext({
+      config,
+      baseDirectory: "C:/workspace",
+      profileId: "review",
+    });
+
+    expect(context.workingDirectory).toBe("C:\\workspace");
+    expect(context.project?.rootDir).toBe("C:\\workspace");
+  });
+
   it("merges inherited profile settings", () => {
     const config = validateConfig({
       version: 1,

@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, win32 } from "node:path";
 import type { AgentDockConfig } from "../config/schema.js";
 import type { ExecutionContext, Policy, Profile, Project, RuntimeDescriptor, SecretReference } from "../core/types.js";
 import { toRuntimeDescriptor } from "../runtime/configuration.js";
@@ -46,13 +46,13 @@ export function resolveExecutionContext(options: ResolveOptions): ExecutionConte
   const normalizedProject: Project | undefined = project
     ? {
         id: project.id,
-        rootDir: resolve(baseDirectory, project.rootDir),
+        rootDir: resolveConfiguredPath(baseDirectory, project.rootDir),
         profileIds: project.profileIds,
         ...(project.defaultProfileId ? { defaultProfileId: project.defaultProfileId } : {}),
       }
     : undefined;
   const workingDirectory = normalizedProject?.rootDir ?? baseDirectory;
-  const policyRoots = policy.filesystem.roots.map((root) => resolve(workingDirectory, root));
+  const policyRoots = policy.filesystem.roots.map((root) => resolveConfiguredPath(workingDirectory, root));
   if (!policyRoots.some((root) => isWithinRoot(workingDirectory, root))) {
     throw new Error(`Working directory "${workingDirectory}" is outside Policy "${policy.id}" filesystem roots.`);
   }
@@ -97,8 +97,18 @@ function resolveProfile(config: AgentDockConfig, profileId: string, visited = ne
 }
 
 function isWithinRoot(candidate: string, root: string): boolean {
-  const path = relative(root, candidate);
-  return path === "" || (path !== ".." && !path.startsWith("..\\") && !path.startsWith("../") && !isAbsolute(path));
+  const pathModule = usesWindowsPath(candidate) || usesWindowsPath(root) ? win32 : { relative, isAbsolute };
+  const path = pathModule.relative(root, candidate);
+  return path === "" || (path !== ".." && !path.startsWith("..\\") && !path.startsWith("../") && !pathModule.isAbsolute(path));
+}
+
+function resolveConfiguredPath(baseDirectory: string, configuredPath: string): string {
+  if (usesWindowsPath(baseDirectory) || usesWindowsPath(configuredPath)) return win32.resolve(baseDirectory, configuredPath);
+  return resolve(baseDirectory, configuredPath);
+}
+
+function usesWindowsPath(value: string): boolean {
+  return win32.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }
 
 export function formatDryRun(context: ExecutionContext, task: string): Record<string, unknown> {
