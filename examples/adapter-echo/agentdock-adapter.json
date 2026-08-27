@@ -1,0 +1,9 @@
+{
+  "name": "example-echo",
+  "version": "0.1.0",
+  "entry": "./index.mjs",
+  "agentDockApi": "v1",
+  "runtime": { "id": "example-echo", "versionRange": "*" },
+  "capabilities": ["execute", "stream_events", "cancel", "healthcheck"],
+  "requiredPermissions": []
+}

@@ -4,11 +4,13 @@ import { dirname, join } from "node:path";
 import { loadConfig, ConfigValidationError } from "./config/load.js";
 import { resolveExecutionContext, formatDryRun } from "./policy/resolver.js";
 import { configBaseDirectory, configDataPath, runtimeDescriptors } from "./runtime/configuration.js";
-import { createBuiltinRuntimeRegistry } from "./runtime/registry.js";
+import { createConfiguredRuntimeRegistry } from "./runtime/registry.js";
+import { LocalAdapterStore, localAdapterDirectory } from "./runtime/local-adapters.js";
 import { doctor } from "./runtime/doctor.js";
 import { RunService } from "./runtime/run-service.js";
 import { SessionService } from "./runtime/session-service.js";
 import { SqliteRunStore } from "./storage/sqlite-run-store.js";
+import type { AdapterPermission } from "./adapter-contract/index.js";
 import type { RunStatus } from "./core/types.js";
 import { createAgentDockApiServer } from "./api/server.js";
 
@@ -19,6 +21,11 @@ function usage(): void {
     "  agentdock config validate [path]",
     "  agentdock runtime list [--config path]",
     "  agentdock runtime health <runtime-id> [--config path]",
+    "  agentdock adapter install <local-package-path> [--config path]",
+    "  agentdock adapter list [--config path]",
+    "  agentdock adapter enable <adapter-name> [--grant permission] [--config path]",
+    "  agentdock adapter disable <adapter-name> [--config path]",
+    "  agentdock adapter uninstall <adapter-name> [--config path]",
     "  agentdock doctor [--config path]",
     "  agentdock api serve [--config path] [--port number] [--api-token token]",
     "  agentdock profile list [--config path]",
@@ -50,11 +57,12 @@ interface ParsedOptions {
   port?: number;
   apiToken?: string;
   format?: "json" | "jsonl";
+  grantedPermissions: AdapterPermission[];
   positional: string[];
 }
 
 function parseOptions(args: string[]): ParsedOptions {
-  const result: ParsedOptions = { configPath: ".agentdock/config.json", positional: [] };
+  const result: ParsedOptions = { configPath: ".agentdock/config.json", grantedPermissions: [], positional: [] };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     const next = args[index + 1];
@@ -84,6 +92,9 @@ function parseOptions(args: string[]): ParsedOptions {
       index += 1;
     } else if (arg === "--format" && (next === "json" || next === "jsonl")) {
       result.format = next;
+      index += 1;
+    } else if (arg === "--grant" && next) {
+      result.grantedPermissions.push(next as AdapterPermission);
       index += 1;
     } else if (arg) {
       result.positional.push(arg);
@@ -121,7 +132,7 @@ async function main(): Promise<void> {
     const options = parseOptions(rest);
     try {
       const config = await loadValidatedConfig(options.configPath);
-      const adapters = createBuiltinRuntimeRegistry();
+      const adapters = await createConfiguredRuntimeRegistry(config, options.configPath);
       for (const runtime of runtimeDescriptors(config)) {
         const registered = adapters.list().includes(runtime.adapter) ? "registered" : "missing-adapter";
         process.stdout.write(`${runtime.id}\t${runtime.adapter}\t${runtime.binary ?? "(default)"}\t${runtime.enabled ? "enabled" : "disabled"}\t${registered}\n`);
@@ -146,8 +157,40 @@ async function main(): Promise<void> {
       const config = await loadValidatedConfig(options.configPath);
       const runtime = runtimeDescriptors(config).find((item) => item.id === runtimeId);
       if (!runtime) throw new Error(`Runtime "${runtimeId}" was not found.`);
-      const adapter = createBuiltinRuntimeRegistry().create(runtime);
+      const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
+      const adapter = registry.create(runtime);
       process.stdout.write(`${JSON.stringify(await adapter.healthCheck(), null, 2)}\n`);
+      return;
+    } catch (error) {
+      printError(error);
+      process.exitCode = 2;
+      return;
+    }
+  }
+
+  if (group === "adapter" && (command === "install" || command === "list" || command === "enable" || command === "disable" || command === "uninstall")) {
+    const options = parseOptions(rest);
+    const nameOrPath = options.positional[0];
+    if (command !== "list" && !nameOrPath) {
+      usage();
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const config = await loadValidatedConfig(options.configPath);
+      const store = new LocalAdapterStore(localAdapterDirectory(config, options.configPath));
+      if (command === "install") {
+        process.stdout.write(`${JSON.stringify(store.install(nameOrPath as string), null, 2)}\n`);
+      } else if (command === "list") {
+        process.stdout.write(`${JSON.stringify(store.list(), null, 2)}\n`);
+      } else if (command === "enable") {
+        process.stdout.write(`${JSON.stringify(store.enable(nameOrPath as string, options.grantedPermissions), null, 2)}\n`);
+      } else if (command === "disable") {
+        process.stdout.write(`${JSON.stringify(store.disable(nameOrPath as string), null, 2)}\n`);
+      } else {
+        store.uninstall(nameOrPath as string);
+        process.stdout.write(`${JSON.stringify({ name: nameOrPath, uninstalled: true }, null, 2)}\n`);
+      }
       return;
     } catch (error) {
       printError(error);
@@ -160,7 +203,8 @@ async function main(): Promise<void> {
     const options = parseOptions(command ? [command, ...rest] : rest);
     try {
       const config = await loadValidatedConfig(options.configPath);
-      const report = await doctor({ config, configPath: options.configPath });
+      const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
+      const report = await doctor({ config, configPath: options.configPath, registry });
       process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
       if (!report.healthy) process.exitCode = 2;
       return;
@@ -175,7 +219,8 @@ async function main(): Promise<void> {
     const options = parseOptions(rest);
     try {
       const config = await loadValidatedConfig(options.configPath);
-      const api = createAgentDockApiServer({ config, configPath: options.configPath, ...(options.apiToken ? { apiToken: options.apiToken } : {}) });
+      const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
+      const api = createAgentDockApiServer({ config, configPath: options.configPath, registry, ...(options.apiToken ? { apiToken: options.apiToken } : {}) });
       const address = await api.listen(options.port);
       process.stdout.write(`${JSON.stringify({ listening: true, host: address.host, port: address.port, apiBaseUrl: `http://${address.host}:${address.port}/api/v1`, authentication: "bearer", ...(!options.apiToken && !process.env.AGENTDOCK_API_TOKEN ? { tokenFile: join(dirname(configDataPath(config, options.configPath)), "api-token") } : {}) })}\n`);
       await waitForShutdown(api);
@@ -228,8 +273,9 @@ async function main(): Promise<void> {
         ...(options.profileId ? { profileId: options.profileId } : {}),
         ...(options.projectId ? { projectId: options.projectId } : {}),
       });
-      const adapter = createBuiltinRuntimeRegistry().create(context.runtime);
-      const store = new SqliteRunStore(configDataPath(config, options.configPath));
+      const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
+      const adapter = registry.create(context.runtime);
+      const store = new SqliteRunStore(configDataPath(config, options.configPath), config.storage);
       store.recoverStaleRuns();
       const service = new RunService(store);
       const controller = new AbortController();
@@ -243,6 +289,7 @@ async function main(): Promise<void> {
           adapter,
           ...(options.sessionId ? { sessionId: options.sessionId } : {}),
           signal: controller.signal,
+          redaction: config.redaction,
         })) {
           process.stdout.write(`${JSON.stringify(result.event)}\n`);
           finalStatus = result.run.status;
@@ -309,7 +356,7 @@ async function main(): Promise<void> {
     }
     try {
       const config = await loadValidatedConfig(options.configPath);
-      const store = new SqliteRunStore(configDataPath(config, options.configPath));
+      const store = new SqliteRunStore(configDataPath(config, options.configPath), config.storage);
       try {
         store.recoverStaleRuns();
         if (command === "list") {
@@ -352,7 +399,7 @@ async function main(): Promise<void> {
     }
     try {
       const config = await loadValidatedConfig(options.configPath);
-      const store = new SqliteRunStore(configDataPath(config, options.configPath));
+      const store = new SqliteRunStore(configDataPath(config, options.configPath), config.storage);
       try {
         store.recoverStaleRuns();
         if (command === "create") {
@@ -362,7 +409,8 @@ async function main(): Promise<void> {
             ...(options.profileId ? { profileId: options.profileId } : {}),
             ...(options.projectId ? { projectId: options.projectId } : {}),
           });
-          const session = await new SessionService(store).create(context, createBuiltinRuntimeRegistry().create(context.runtime));
+          const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
+          const session = await new SessionService(store).create(context, registry.create(context.runtime));
           process.stdout.write(`${JSON.stringify(session, null, 2)}\n`);
         } else if (command === "list") {
           process.stdout.write(`${JSON.stringify(store.listSessions(), null, 2)}\n`);

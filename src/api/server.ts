@@ -6,10 +6,11 @@ import { dirname, join } from "node:path";
 import { loadConfig } from "../config/load.js";
 import type { AgentDockConfig } from "../config/schema.js";
 import type { NetworkPolicy, Run, RunEvent, RunRouteSnapshot, RunStatus, RuntimeCapability } from "../core/types.js";
-import { redactSensitiveValue } from "../core/redaction.js";
+import { redactSensitiveValue, type RedactionOptions } from "../core/redaction.js";
+import { AgentDockLogger, type Logger } from "../core/logger.js";
 import { resolveExecutionContext } from "../policy/resolver.js";
 import { configBaseDirectory, configDataPath, runtimeDescriptors } from "../runtime/configuration.js";
-import { createBuiltinRuntimeRegistry, type RuntimeRegistry } from "../runtime/registry.js";
+import { createBuiltinRuntimeRegistry, createConfiguredRuntimeRegistry, type RuntimeRegistry } from "../runtime/registry.js";
 import { RunService } from "../runtime/run-service.js";
 import { SqliteRunStore } from "../storage/sqlite-run-store.js";
 import { resolveRoute, RouteResolutionError, type RuntimeHealthStatus } from "../runtime/router.js";
@@ -45,6 +46,8 @@ export interface AgentDockApiServerOptions {
   maxConcurrentRuns?: number;
   apiToken?: string;
   runtimeHealth?: Readonly<Record<string, RuntimeHealthStatus>>;
+  logger?: Logger;
+  redaction?: RedactionOptions;
 }
 
 export interface AgentDockApiServer {
@@ -74,6 +77,11 @@ interface ActiveRun {
   completion?: Promise<void>;
 }
 
+interface PendingIdempotentStart {
+  fingerprint: string;
+  operation: Promise<{ run: Run; created: boolean }>;
+}
+
 type RunListener = (event: RunEvent) => void;
 
 class LocalRunManager {
@@ -82,6 +90,7 @@ class LocalRunManager {
   private readonly listeners = new Map<string, Set<RunListener>>();
   private readonly pendingControllers = new Set<AbortController>();
   private readonly startOperations = new Set<Promise<{ run: Run; created: boolean }>>();
+  private readonly pendingIdempotentStarts = new Map<string, PendingIdempotentStart>();
   private pendingStarts = 0;
   private closing = false;
 
@@ -93,14 +102,33 @@ class LocalRunManager {
     private readonly maxConcurrentRuns: number,
     private readonly sensitiveValues: readonly string[],
     private readonly runtimeHealth: Readonly<Record<string, RuntimeHealthStatus>> | undefined,
+    private readonly logger: Logger,
+    private readonly redaction: RedactionOptions,
   ) {
     this.runService = new RunService(store);
   }
 
   public start(input: StartRunRequest): Promise<{ run: Run; created: boolean }> {
     if (this.closing) return Promise.reject(new ApiRequestError(503, "API_SHUTTING_DOWN", "The API server is shutting down."));
+    const fingerprint = fingerprintStartRequest(input);
+    if (input.idempotencyKey) {
+      const pending = this.pendingIdempotentStarts.get(input.idempotencyKey);
+      if (pending) {
+        if (pending.fingerprint !== fingerprint) {
+          return Promise.reject(new ApiRequestError(409, "IDEMPOTENCY_KEY_CONFLICT", "The idempotency key was already used for a different request."));
+        }
+        return pending.operation.then(({ run }) => ({ run, created: false }));
+      }
+    }
     const operation = this.startInternal(input);
     this.startOperations.add(operation);
+    if (input.idempotencyKey) {
+      this.pendingIdempotentStarts.set(input.idempotencyKey, { fingerprint, operation });
+      operation.then(
+        () => this.pendingIdempotentStarts.delete(input.idempotencyKey as string),
+        () => this.pendingIdempotentStarts.delete(input.idempotencyKey as string),
+      );
+    }
     operation.then(
       () => this.startOperations.delete(operation),
       () => this.startOperations.delete(operation),
@@ -156,6 +184,7 @@ class LocalRunManager {
         runId,
         signal: controller.signal,
         sensitiveValues: this.sensitiveValues,
+        redaction: this.redaction,
         routing: routing as RunRouteSnapshot,
       })[Symbol.asyncIterator]();
 
@@ -222,9 +251,12 @@ class LocalRunManager {
         this.publish(next.value.event);
       }
     } catch {
+      this.logger.error("adapter_execution_failed", { runId });
       this.recoverUnexpectedFailure(runId);
     } finally {
       this.activeRuns.delete(runId);
+      const run = this.store.getRun(runId);
+      if (run) this.logger.info("run_finished", { runId, status: run.status });
     }
   }
 
@@ -265,7 +297,7 @@ class LocalRunManager {
 
 export function createAgentDockApiServer(options: AgentDockApiServerOptions): AgentDockApiServer {
   const ownsStore = !options.store;
-  const store = options.store ?? new SqliteRunStore(configDataPath(options.config, options.configPath));
+  const store = options.store ?? new SqliteRunStore(configDataPath(options.config, options.configPath), options.config.storage);
   store.recoverStaleRuns();
   const requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const maxConcurrentRequests = options.maxConcurrentRequests ?? DEFAULT_MAX_CONCURRENT_REQUESTS;
@@ -274,6 +306,8 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
   validatePositiveInteger(maxConcurrentRequests, "maxConcurrentRequests");
   validatePositiveInteger(maxConcurrentRuns, "maxConcurrentRuns");
   const apiToken = resolveApiToken(options, configDataPath(options.config, options.configPath));
+  const redaction = options.redaction ?? options.config.redaction;
+  const logger = options.logger ?? new AgentDockLogger({ level: options.config.logging.level, redaction });
   const manager = new LocalRunManager(
     store,
     options.config,
@@ -282,6 +316,8 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
     maxConcurrentRuns,
     apiToken ? [apiToken] : [],
     options.runtimeHealth,
+    logger,
+    redaction,
   );
   const streams = new Set<ServerResponse>();
   const maxRequestBodyBytes = options.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES;
@@ -295,7 +331,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
     let longLived = false;
     try {
       if (inFlightRequests >= maxConcurrentRequests) {
-        writeJson(response, 429, { error: { code: "REQUEST_CONCURRENCY_LIMIT", message: "The maximum number of concurrent API requests has been reached." } }, apiToken ? [apiToken] : []);
+        writeJson(response, 429, { error: { code: "REQUEST_CONCURRENCY_LIMIT", message: "The maximum number of concurrent API requests has been reached." } }, apiToken ? [apiToken] : [], redaction);
         return;
       }
       inFlightRequests += 1;
@@ -305,19 +341,19 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
       authenticate(request, apiToken);
 
       if (request.method === "GET" && path === `${API_PREFIX}/openapi.json`) {
-        writeJson(response, 200, openApiDocument, apiToken ? [apiToken] : []);
+        writeJson(response, 200, openApiDocument, apiToken ? [apiToken] : [], redaction);
         return;
       }
       if (request.method === "GET" && path === `${API_PREFIX}/health`) {
-        writeJson(response, 200, { healthy: true, apiVersion: "v1" }, apiToken ? [apiToken] : []);
+        writeJson(response, 200, { healthy: true, apiVersion: "v1" }, apiToken ? [apiToken] : [], redaction);
         return;
       }
       if (request.method === "GET" && path === `${API_PREFIX}/runtimes`) {
-        writeJson(response, 200, { runtimes: runtimeDescriptors(options.config) }, apiToken ? [apiToken] : []);
+        writeJson(response, 200, { runtimes: runtimeDescriptors(options.config) }, apiToken ? [apiToken] : [], redaction);
         return;
       }
       if (request.method === "GET" && path === `${API_PREFIX}/sessions`) {
-        writeJson(response, 200, { sessions: store.listSessions() }, apiToken ? [apiToken] : []);
+        writeJson(response, 200, { sessions: store.listSessions() }, apiToken ? [apiToken] : [], redaction);
         return;
       }
       if (request.method === "GET" && path === `${API_PREFIX}/runs`) {
@@ -330,7 +366,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
             ...(projectId ? { projectId } : {}),
             ...(limit ? { limit } : {}),
           }),
-        }, apiToken ? [apiToken] : []);
+        }, apiToken ? [apiToken] : [], redaction);
         return;
       }
       if (request.method === "POST" && path === `${API_PREFIX}/runs`) {
@@ -346,7 +382,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
           run: result.run,
           created: result.created,
           eventsUrl: `${API_PREFIX}/runs/${result.run.id}/events`,
-        }, apiToken ? [apiToken] : []);
+        }, apiToken ? [apiToken] : [], redaction);
         return;
       }
 
@@ -359,14 +395,14 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         const events = store.listEvents(runId).filter((event) => event.sequence > after);
         if (wantsSse(request, url)) {
           if (events.length > MAX_SSE_BUFFERED_EVENTS) throw new ApiRequestError(413, "SSE_REPLAY_TOO_LARGE", "The requested SSE replay is too large; reconnect with a later cursor.");
-          longLived = writeSse(response, runId, events, run.status, store, manager, streams, apiToken ? [apiToken] : [], () => {
+          longLived = writeSse(response, runId, events, run.status, store, manager, streams, apiToken ? [apiToken] : [], redaction, () => {
             if (holdsRequestSlot) {
               holdsRequestSlot = false;
               inFlightRequests -= 1;
             }
           });
         } else {
-          writeJson(response, 200, { events }, apiToken ? [apiToken] : []);
+          writeJson(response, 200, { events }, apiToken ? [apiToken] : [], redaction);
         }
         return;
       }
@@ -377,18 +413,18 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         if (request.method === "GET") {
           const run = store.getRun(runId);
           if (!run) throw new ApiRequestError(404, "RUN_NOT_FOUND", `Run "${runId}" was not found.`);
-          writeJson(response, 200, { run }, apiToken ? [apiToken] : []);
+          writeJson(response, 200, { run }, apiToken ? [apiToken] : [], redaction);
           return;
         }
         if (request.method === "POST" && url.searchParams.get("action") === "cancel") {
-          writeCancelResult(response, manager.cancel(runId), runId, apiToken ? [apiToken] : []);
+          writeCancelResult(response, manager.cancel(runId), runId, apiToken ? [apiToken] : [], redaction);
           return;
         }
       }
 
       const cancelRoute = /^\/api\/v1\/runs\/([^/]+)\/cancel$/.exec(path);
       if (request.method === "POST" && cancelRoute?.[1]) {
-        writeCancelResult(response, manager.cancel(decodeURIComponent(cancelRoute[1])), decodeURIComponent(cancelRoute[1]), apiToken ? [apiToken] : []);
+        writeCancelResult(response, manager.cancel(decodeURIComponent(cancelRoute[1])), decodeURIComponent(cancelRoute[1]), apiToken ? [apiToken] : [], redaction);
         return;
       }
 
@@ -396,13 +432,15 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
     } catch (error) {
       const apiError = toApiError(error);
       if (apiError.code === "AUTH_REQUIRED" || apiError.code === "INVALID_AUTH") response.setHeader("www-authenticate", "Bearer");
+      // Keep query strings out of logs; clients occasionally put bearer-like values there while debugging.
+      logger.warn("api_request_failed", { method: request.method, path: (request.url ?? "/").split("?", 1)[0], code: apiError.code, statusCode: apiError.statusCode });
       writeJson(response, apiError.statusCode, {
         error: {
           code: apiError.code,
           message: apiError.message,
           ...(apiError.details ? { details: apiError.details } : {}),
         },
-      }, apiToken ? [apiToken] : []);
+      }, apiToken ? [apiToken] : [], redaction);
     } finally {
       if (holdsRequestSlot && !longLived) inFlightRequests -= 1;
     }
@@ -455,7 +493,8 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
 }
 
 export async function createAgentDockApiServerFromConfig(configPath: string): Promise<AgentDockApiServer> {
-  return createAgentDockApiServer({ config: await loadConfig(configPath), configPath });
+  const config = await loadConfig(configPath);
+  return createAgentDockApiServer({ config, configPath, registry: await createConfiguredRuntimeRegistry(config, configPath) });
 }
 
 function parseStartRunRequest(body: unknown): Omit<StartRunRequest, "idempotencyKey"> & { idempotencyKey?: string } {
@@ -579,9 +618,9 @@ async function readJsonBody(request: IncomingMessage, maximumBytes: number, time
   }
 }
 
-function writeJson(response: ServerResponse, statusCode: number, body: unknown, sensitiveValues: readonly string[] = []): void {
+function writeJson(response: ServerResponse, statusCode: number, body: unknown, sensitiveValues: readonly string[] = [], redaction: RedactionOptions = {}): void {
   if (response.writableEnded) return;
-  const encoded = JSON.stringify(redactSensitiveValue(body, sensitiveValues));
+  const encoded = JSON.stringify(redactSensitiveValue(body, sensitiveValues, redaction));
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8",
     "content-length": Buffer.byteLength(encoded),
@@ -603,6 +642,7 @@ function writeSse(
   manager: LocalRunManager,
   streams: Set<ServerResponse>,
   sensitiveValues: readonly string[],
+  redaction: RedactionOptions,
   releaseRequestSlot: () => void,
 ): boolean {
   response.writeHead(200, {
@@ -612,7 +652,7 @@ function writeSse(
     "x-accel-buffering": "no",
   });
   response.write(": agentdock event stream\n\n");
-  const queue = events.map((event) => redactSensitiveValue(event, sensitiveValues));
+  const queue = events.map((event) => redactSensitiveValue(event, sensitiveValues, redaction));
   let ended = false;
   let unsubscribe = (): void => undefined;
   let lastKnownSequence = events.at(-1)?.sequence ?? -1;
@@ -649,7 +689,7 @@ function writeSse(
       if (ended) return;
       if (event.sequence <= lastKnownSequence) return;
       lastKnownSequence = event.sequence;
-      queue.push(redactSensitiveValue(event, sensitiveValues));
+      queue.push(redactSensitiveValue(event, sensitiveValues, redaction));
       if (queue.length > MAX_SSE_BUFFERED_EVENTS) {
         cleanup();
         response.end();
@@ -666,7 +706,7 @@ function writeSse(
       terminal = true;
       for (const event of store.listEvents(runId)) {
         if (event.sequence <= lastKnownSequence) continue;
-        queue.push(redactSensitiveValue(event, sensitiveValues));
+        queue.push(redactSensitiveValue(event, sensitiveValues, redaction));
         lastKnownSequence = event.sequence;
       }
     }
@@ -681,9 +721,9 @@ function writeSseEvent(response: ServerResponse, event: RunEvent): boolean {
   return response.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
 }
 
-function writeCancelResult(response: ServerResponse, result: ReturnType<LocalRunManager["cancel"]>, runId: string, sensitiveValues: readonly string[]): void {
+function writeCancelResult(response: ServerResponse, result: ReturnType<LocalRunManager["cancel"]>, runId: string, sensitiveValues: readonly string[], redaction: RedactionOptions): void {
   if (result === "accepted") {
-    writeJson(response, 202, { runId, cancellationRequested: true }, sensitiveValues);
+    writeJson(response, 202, { runId, cancellationRequested: true }, sensitiveValues, redaction);
     return;
   }
   if (result === "not_found") throw new ApiRequestError(404, "RUN_NOT_FOUND", `Run "${runId}" was not found.`);

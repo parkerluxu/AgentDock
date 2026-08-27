@@ -47,6 +47,13 @@ interface IdempotencyRow {
   created_at: string;
 }
 
+export interface SqliteRunStoreOptions {
+  /** Delete terminal Run records older than this many days on open. */
+  retentionDays?: number | undefined;
+  /** Whether message/tool output payloads are persisted. Defaults to true. */
+  saveOutput?: boolean;
+}
+
 export type IdempotencyReservation =
   | { status: "created" }
   | { status: "existing"; runId: string }
@@ -78,13 +85,24 @@ export class SqliteRunStore {
   private readonly database: DatabaseSync;
   private readonly runById: StatementSync;
   private readonly eventByRun: StatementSync;
+  private readonly saveOutput: boolean;
 
-  public constructor(databasePath: string) {
+  public constructor(databasePath: string, options: SqliteRunStoreOptions = {}) {
     const absolutePath = resolve(databasePath);
+    if (options.retentionDays !== undefined && (!Number.isInteger(options.retentionDays) || options.retentionDays < 1)) {
+      throw new Error("The SQLite retentionDays option must be a positive integer.");
+    }
+    this.saveOutput = options.saveOutput ?? true;
     mkdirSync(dirname(absolutePath), { recursive: true });
     this.database = new DatabaseSync(absolutePath);
-    this.database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-    this.migrate();
+    try {
+      this.database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+      this.migrate();
+      if (options.retentionDays !== undefined) this.pruneExpired(options.retentionDays);
+    } catch (error) {
+      this.database.close();
+      throw error;
+    }
     this.runById = this.database.prepare("SELECT * FROM runs WHERE id = ?");
     this.eventByRun = this.database.prepare("SELECT * FROM run_events WHERE run_id = ? ORDER BY sequence ASC");
   }
@@ -190,9 +208,10 @@ export class SqliteRunStore {
   }
 
   public appendEvent(event: RunEvent): void {
+    const persistedEvent = this.saveOutput ? event : eventWithoutOutput(event);
     this.database.prepare(`
       INSERT INTO run_events (run_id, sequence, timestamp, type, payload_json) VALUES (?, ?, ?, ?, ?)
-    `).run(event.runId, event.sequence, event.timestamp, event.type, JSON.stringify(event.payload));
+    `).run(persistedEvent.runId, persistedEvent.sequence, persistedEvent.timestamp, persistedEvent.type, JSON.stringify(persistedEvent.payload));
   }
 
   public reserveIdempotencyKey(key: string, requestHash: string, runId: string, ownerPid = process.pid): IdempotencyReservation {
@@ -237,18 +256,65 @@ export class SqliteRunStore {
     for (const row of running) {
       if (activeRunIds.has(row.id)) continue;
       if (row.owner_pid !== null && processIsRunning(row.owner_pid)) continue;
-      const run = this.updateRun(row.id, { status: "failed", finishedAt: new Date().toISOString(), errorCode: "PROCESS_NOT_ACTIVE_AFTER_RESTART" });
-      const nextSequence = this.listEvents(row.id).at(-1)?.sequence ?? -1;
+      const recoveredRun = this.recoverStaleRun(row.id);
+      if (recoveredRun) recovered.push(recoveredRun);
+    }
+    return recovered;
+  }
+
+  private recoverStaleRun(id: string): Run | undefined {
+    const now = new Date().toISOString();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const updated = this.database.prepare(`
+        UPDATE runs
+        SET status = 'failed', finished_at = ?, error_code = 'PROCESS_NOT_ACTIVE_AFTER_RESTART'
+        WHERE id = ? AND status IN ('queued', 'running')
+      `).run(now, id);
+      if (Number(updated.changes) === 0) {
+        this.database.exec("ROLLBACK");
+        return undefined;
+      }
+
+      const nextSequence = this.listEvents(id).at(-1)?.sequence ?? -1;
       this.appendEvent({
-        runId: row.id,
+        runId: id,
         sequence: nextSequence + 1,
-        timestamp: new Date().toISOString(),
+        timestamp: now,
         type: "error",
         payload: { status: "failed", errorCode: "PROCESS_NOT_ACTIVE_AFTER_RESTART" },
       });
-      recovered.push(run);
+      this.database.exec("COMMIT");
+      return this.getRun(id);
+    } catch (error) {
+      try { this.database.exec("ROLLBACK"); } catch { /* Preserve the original recovery error. */ }
+      throw error;
     }
-    return recovered;
+  }
+
+  /** Remove terminal Run data and old idempotency reservations. Active Runs are never removed. */
+  public pruneExpired(retentionDays: number, now = new Date()): { runs: number; events: number; idempotencyKeys: number } {
+    if (!Number.isInteger(retentionDays) || retentionDays < 1) throw new Error("The SQLite retentionDays option must be a positive integer.");
+    const cutoff = new Date(now.getTime() - retentionDays * 24 * 60 * 60 * 1_000).toISOString();
+    const runIds = this.database.prepare(`
+      SELECT id FROM runs
+      WHERE status IN ('succeeded', 'failed', 'cancelled', 'timed_out')
+        AND finished_at IS NOT NULL
+        AND finished_at < ?
+    `).all(cutoff) as unknown as Array<{ id: string }>;
+    let events = 0;
+    for (const { id } of runIds) {
+      const deleted = this.database.prepare("DELETE FROM run_events WHERE run_id = ?").run(id);
+      events += Number(deleted.changes);
+    }
+    const deletedRuns = this.database.prepare(`
+      DELETE FROM runs
+      WHERE status IN ('succeeded', 'failed', 'cancelled', 'timed_out')
+        AND finished_at IS NOT NULL
+        AND finished_at < ?
+    `).run(cutoff);
+    const deletedKeys = this.database.prepare("DELETE FROM api_idempotency_keys WHERE created_at < ? AND run_id NOT IN (SELECT id FROM runs)").run(cutoff);
+    return { runs: Number(deletedRuns.changes), events, idempotencyKeys: Number(deletedKeys.changes) };
   }
 
   private migrate(): void {
@@ -353,4 +419,14 @@ function runFromRow(row: RunRow): Run {
     ...(row.exit_code !== null ? { exitCode: row.exit_code } : {}),
     ...(row.error_code ? { errorCode: row.error_code } : {}),
   };
+}
+
+function eventWithoutOutput(event: RunEvent): RunEvent {
+  if (event.type === "status") return event;
+  const payload: Record<string, unknown> = { outputSaved: false };
+  for (const [key, value] of Object.entries(event.payload)) {
+    if (key === "text" || key === "content" || key === "output" || key === "result" || key === "arguments" || key === "stderr" || key === "stdout" || key === "message") continue;
+    payload[key] = value;
+  }
+  return { ...event, payload };
 }

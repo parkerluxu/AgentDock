@@ -3,7 +3,7 @@ import type { AgentAdapter, AdapterTaskRequest } from "../adapter-contract/index
 import { isCapabilitySupported } from "../adapter-contract/index.js";
 import { canTransitionRun, transitionRun } from "../core/state-machine.js";
 import type { ExecutionContext, Run, RunEvent, RunRouteSnapshot, RunStatus } from "../core/types.js";
-import { redactSensitiveValue } from "../core/redaction.js";
+import { redactSensitiveValue, type RedactionOptions } from "../core/redaction.js";
 import { SqliteRunStore } from "../storage/sqlite-run-store.js";
 import { EnvironmentSecretResolver, type SecretResolver } from "../secrets/resolver.js";
 
@@ -16,6 +16,7 @@ export interface ExecuteRunOptions {
   signal?: AbortSignal;
   runId?: string;
   sensitiveValues?: readonly string[];
+  redaction?: RedactionOptions;
   routing?: RunRouteSnapshot;
 }
 
@@ -35,6 +36,8 @@ export class RunService {
     if (existingSession?.status !== undefined && existingSession.status !== "active") {
       throw new Error(`Session "${existingSession.id}" is archived and cannot accept a new Run.`);
     }
+    const resolvedSecrets = this.secretResolver.resolve(options.context.secretReferences);
+    const sensitiveValues = [...(options.sensitiveValues ?? []), ...Object.values(resolvedSecrets)];
     let session = existingSession;
     if (!session) {
       const created = options.runtimeSessionId
@@ -56,7 +59,7 @@ export class RunService {
       profileId: options.context.profile.id,
       ...(options.context.project ? { projectId: options.context.project.id } : {}),
       sessionId: session.id,
-      task: options.task,
+      task: redactSensitiveValue(options.task, sensitiveValues, options.redaction),
       snapshot: {
         runtime: options.context.runtime,
         profile: options.context.profile,
@@ -71,7 +74,6 @@ export class RunService {
       },
       ownerPid: process.pid,
     });
-    const sensitiveValues = options.sensitiveValues ?? [];
     const queuedEvent: RunEvent = {
       runId: run.id,
       sequence: 0,
@@ -93,7 +95,7 @@ export class RunService {
         runId: run.id,
         task: options.task,
         workingDirectory: options.context.workingDirectory,
-        environment: { ...options.context.environment, ...this.secretResolver.resolve(options.context.secretReferences) },
+        environment: { ...options.context.environment, ...resolvedSecrets },
         secretReferences: options.context.secretReferences,
         runtime: options.context.runtime,
         settings: options.context.profile.settings,
@@ -104,7 +106,7 @@ export class RunService {
       yield { run: current, event: queuedEvent };
       let nextSequence = 1;
       for await (const adapterEvent of options.adapter.execute(request)) {
-        const safeAdapterEvent = redactSensitiveValue(adapterEvent, sensitiveValues);
+        const safeAdapterEvent = redactSensitiveValue(adapterEvent, sensitiveValues, options.redaction);
         const event: RunEvent = { ...safeAdapterEvent, sequence: nextSequence++ };
         this.store.appendEvent(event);
         const nextStatus = statusFromEvent(event, controller.signal.aborted);
@@ -132,7 +134,15 @@ export class RunService {
         const finalStatus = controller.signal.aborted ? "cancelled" : "failed";
         current = this.store.updateRun(run.id, { status: finalStatus, finishedAt: new Date().toISOString(), errorCode: controller.signal.aborted ? "CANCELLED" : "NO_TERMINAL_EVENT" });
         const finalSequence = (this.store.listEvents(run.id).at(-1)?.sequence ?? -1) + 1;
-        this.store.appendEvent({ runId: run.id, sequence: finalSequence, timestamp: new Date().toISOString(), type: controller.signal.aborted ? "status" : "error", payload: { status: finalStatus, errorCode: current.errorCode } });
+        const finalEvent: RunEvent = {
+          runId: run.id,
+          sequence: finalSequence,
+          timestamp: new Date().toISOString(),
+          type: controller.signal.aborted ? "status" : "error",
+          payload: { status: finalStatus, errorCode: current.errorCode },
+        };
+        this.store.appendEvent(finalEvent);
+        yield { run: current, event: finalEvent };
       }
     } catch (error) {
       const nextStatus: RunStatus = controller.signal.aborted ? "cancelled" : "failed";
@@ -151,7 +161,7 @@ export class RunService {
         payload: {
           status: controller.signal.aborted ? "cancelled" : "failed",
           errorCode: "ADAPTER_EXECUTION_ERROR",
-          message: redactSensitiveValue(String(error), sensitiveValues),
+          message: redactSensitiveValue(String(error), sensitiveValues, options.redaction),
         },
       };
       this.store.appendEvent(event);

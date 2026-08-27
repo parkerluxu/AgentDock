@@ -55,9 +55,28 @@ const projectSchema = z.object({
   defaultProfileId: identifier.optional(),
 });
 
+const storageSchema = z.object({
+  /** Delete terminal Run data older than this many days when the store opens. */
+  retentionDays: z.number().int().positive().optional(),
+  /** Keep message/tool output payloads in SQLite and historical exports. */
+  saveOutput: z.boolean().default(true),
+}).default({});
+
+const loggingSchema = z.object({
+  level: z.enum(["debug", "info", "warn", "error"]).default("warn"),
+}).default({});
+
+const redactionSchema = z.object({
+  /** Additional object keys whose values must be masked in logs and API output. */
+  additionalKeys: z.array(z.string().min(1)).default([]),
+}).default({});
+
 export const configSchema = z.object({
   version: z.literal(1),
   dataDir: z.string().min(1).optional(),
+  storage: storageSchema,
+  logging: loggingSchema,
+  redaction: redactionSchema,
   runtimes: z.array(runtimeSchema).default([]),
   profiles: z.array(profileSchema).default([]),
   projects: z.array(projectSchema).default([]),

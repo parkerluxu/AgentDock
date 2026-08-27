@@ -1,6 +1,6 @@
 # Runtime 能力矩阵（阶段 0 / 当前验证）
 
-该矩阵从实现前核对表更新为当前验证记录。`version-dependent` 表示能力存在版本或运行条件差异，不能理解为所有环境无条件支持。最近一次人工联调：2026-08-22。
+该矩阵从实现前核对表更新为当前验证记录。`version-dependent` 表示能力存在版本或运行条件差异，不能理解为所有环境无条件支持。最近一次人工联调：2026-08-22。每次 Runtime/Adapter 更新按[兼容矩阵更新流程](./adapter-compatibility-process.zh-CN.md)执行。
 
 | 能力 | Claude Code | Codex CLI | AgentDock 统一语义 |
 | --- | --- | --- | --- |

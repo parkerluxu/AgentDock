@@ -2,7 +2,7 @@
 
 AgentDock is a local-first control plane for registering, routing and isolating multiple AI Agent runtimes.
 
-The current MVP provides local Runtime discovery, Claude Code/Codex execution, Policy resolution, Session/Run history, ordered event storage, diagnostics, a loopback HTTP API and the first Adapter SDK slice. Third-party Adapter installation and OS-level sandboxing are planned next.
+The current MVP provides local Runtime discovery, Claude Code/Codex execution, Policy resolution, Session/Run history, ordered event storage, diagnostics, a loopback HTTP API and local Adapter lifecycle management. Third-party Adapter installation is local-only and does not provide OS-level sandboxing.
 
 ## Development
 
@@ -27,6 +27,16 @@ node dist/cli.js runtime list --config examples/config.example.json
 node dist/cli.js runtime health claude-code --config examples/config.example.json
 node dist/cli.js runtime health codex --config examples/config.example.json
 node dist/cli.js doctor --config examples/config.example.json
+```
+
+Manage local Adapter packages. Installation is disabled by default; an Adapter with manifest permissions must be enabled with explicit grants:
+
+```text
+node dist/cli.js adapter install ./path/to/adapter --config examples/config.example.json
+node dist/cli.js adapter list --config examples/config.example.json
+node dist/cli.js adapter enable example --grant filesystem.read --config examples/config.example.json
+node dist/cli.js adapter disable example --config examples/config.example.json
+node dist/cli.js adapter uninstall example --config examples/config.example.json
 ```
 
 Preview a resolved execution without starting an Agent:
@@ -67,4 +77,7 @@ AgentDock uses the built-in `node:sqlite` module. It requires Node.js 22.5 or ne
 `dataDir` is a directory, relative to the configuration file. AgentDock stores its SQLite database at `<dataDir>/agentdock.db` (or `.agentdock/data/agentdock.db` by default). Development builds that previously created a database directly at `dataDir` remain readable without moving or deleting data.
 
 See [the requirements analysis](docs/requirements-analysis.zh-CN.md) and [the development plan](docs/development-plan.zh-CN.md) for scope and milestones.
+Configuration details are in [the configuration reference](docs/configuration-reference.zh-CN.md); API and SDK upgrades are covered by the [migration guide](docs/migration-guide.zh-CN.md).
+The deterministic [example Adapter](examples/adapter-echo/README.md) can be installed without model access.
+The [local API client example](examples/api-client/README.md) submits a Run and consumes its SSE stream using only Node.js built-ins.
 For continuing development in a new Codex session, start with the [session handoff](docs/next-session-handoff.zh-CN.md).

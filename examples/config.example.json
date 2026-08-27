@@ -1,6 +1,15 @@
 {
   "version": 1,
   "dataDir": "../.agentdock/data",
+  "storage": {
+    "saveOutput": true
+  },
+  "logging": {
+    "level": "warn"
+  },
+  "redaction": {
+    "additionalKeys": []
+  },
   "runtimes": [
     {
       "id": "claude-code",

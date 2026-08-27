@@ -1,8 +1,8 @@
 # AgentDock 开发状态
 
-> 更新时间：2026-08-22
+> 更新时间：2026-08-26
 >
-> 范围：阶段 0 已完成；阶段 1 已完成第 1 至第 4 周的核心闭环；阶段 2 API 第 1 周已开始。
+> 范围：阶段 0 已完成；阶段 1 已完成第 1 至第 4 周的核心闭环；阶段 2 功能开发和确定性集成回归已完成，Beta 故障验收仍在进行。
 
 ## 当前可用能力
 
@@ -16,12 +16,15 @@
 - Run 查询、事件查询、JSON/JSONL 导出，以及基于 owner PID 的崩溃恢复。
 - 数据默认保存在 `.agentdock/data/agentdock.db`；`dataDir` 是相对配置文件的目录。旧开发版本把 `dataDir` 当数据库文件创建的数据仍会自动读取，避免丢失既有历史。
 - 本地 HTTP API v1：仅回环地址监听，支持 Bearer token、Run 提交/查询/取消、请求体/超时/并发边界、带 `after` 游标的 SSE 事件回放/订阅、SQLite 幂等和确定性可解释路由。
+- 本地 Adapter 生命周期：包 manifest 校验、本地复制安装、列出、启用、禁用、卸载、显式权限授权和入口路径边界。
+- 数据策略：终态 Run 保留期限、输出保存开关、结构化日志级别和默认/额外字段脱敏。
+- 阶段 2 集成回归：内置 Echo、脚本化 Claude/Codex、本地示例 Adapter、SSE 重连、幂等并发、24 Run 突发、并发取消、Adapter 崩溃、损坏 SQLite 诊断、数据库重开恢复和 ProcessRunner 取消/退出码。
 
 ## 已验证项
 
 ```text
 npm run typecheck    PASS
-npm test             PASS（当前：17 文件、48 测试）
+npm test             PASS（当前：22 文件、79 测试）
 npm run build        PASS
 ```
 
@@ -44,6 +47,6 @@ Codex CLI 0.147.0
 
 ## 下一开发阶段
 
-阶段 2 已完成 API 与事件协议、安全可靠性和确定性路由切片。下一步是抽取 Adapter SDK/manifest，并补 OpenAPI、压力、磁盘错误和长任务恢复验收。
+阶段 2 功能开发、集成回归、SQLite/重启恢复自动化、迁移文档和兼容流程已完成。Beta 发布前仍需按开发计划执行真实磁盘已满、多平台信号差异、长任务跨进程重启和正式版本发布门禁。
 
 详细范围及验收门槛见[开发计划](development-plan.zh-CN.md)。

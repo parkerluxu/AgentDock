@@ -7,6 +7,28 @@
   "properties": {
     "version": { "const": 1 },
     "dataDir": { "type": "string", "minLength": 1 },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "retentionDays": { "type": "integer", "minimum": 1 },
+        "saveOutput": { "type": "boolean", "default": true }
+      },
+      "additionalProperties": false
+    },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "level": { "type": "string", "enum": ["debug", "info", "warn", "error"], "default": "warn" }
+      },
+      "additionalProperties": false
+    },
+    "redaction": {
+      "type": "object",
+      "properties": {
+        "additionalKeys": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
+      },
+      "additionalProperties": false
+    },
     "runtimes": {
       "type": "array",
       "items": {
@@ -79,7 +101,19 @@
             "type": "object",
             "required": ["allow"],
             "properties": {
-              "allow": { "type": "array", "items": { "type": "string" } }
+              "allow": { "type": "array", "items": { "type": "string" } },
+              "secretRefs": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "object",
+                  "required": ["provider", "key"],
+                  "properties": {
+                    "provider": { "type": "string", "enum": ["env", "keychain", "custom"] },
+                    "key": { "type": "string", "minLength": 1 }
+                  },
+                  "additionalProperties": false
+                }
+              }
             },
             "additionalProperties": false
           },

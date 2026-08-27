@@ -15,6 +15,10 @@ describe("Run state machine", () => {
     expect(canTransitionRun("running", "timed_out")).toBe(true);
   });
 
+  it("allows an Adapter to complete before emitting a running event", () => {
+    expect(transitionRun("queued", "succeeded")).toBe("succeeded");
+  });
+
   it("rejects transitions out of terminal states", () => {
     expect(() => transitionRun("succeeded", "running")).toThrow(InvalidRunTransitionError);
     expect(() => transitionRun("failed", "succeeded")).toThrow("Cannot transition Run");

@@ -1,7 +1,9 @@
 import { validateAdapterManifest, type AgentAdapter } from "../adapter-contract/index.js";
+import type { AgentDockConfig } from "../config/schema.js";
 import type { RuntimeDescriptor } from "../core/types.js";
 import { ClaudeCodeAdapter, CodexAdapter } from "./adapters.js";
 import { EchoAdapter } from "./echo-adapter.js";
+import { LocalAdapterStore, localAdapterDirectory, registerEnabledLocalAdapters } from "./local-adapters.js";
 import { ProcessRunner } from "./process-runner.js";
 
 export type AdapterFactory = (runtime: RuntimeDescriptor) => AgentAdapter;
@@ -32,5 +34,15 @@ export function createBuiltinRuntimeRegistry(runner = new ProcessRunner()): Runt
   registry.register("claude-code", (runtime) => new ClaudeCodeAdapter(runtime, runner));
   registry.register("codex", (runtime) => new CodexAdapter(runtime, runner));
   registry.register("echo", (runtime) => new EchoAdapter(runtime));
+  return registry;
+}
+
+export async function createConfiguredRuntimeRegistry(
+  config: AgentDockConfig,
+  configPath: string,
+  runner = new ProcessRunner(),
+): Promise<RuntimeRegistry> {
+  const registry = createBuiltinRuntimeRegistry(runner);
+  await registerEnabledLocalAdapters(new LocalAdapterStore(localAdapterDirectory(config, configPath)), registry);
   return registry;
 }

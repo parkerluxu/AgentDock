@@ -4,7 +4,7 @@ import type { AgentDockConfig } from "../config/schema.js";
 import { EnvironmentSecretResolver, type SecretResolver } from "../secrets/resolver.js";
 import { SqliteRunStore } from "../storage/sqlite-run-store.js";
 import { configBaseDirectory, configDataPath, runtimeDescriptors } from "./configuration.js";
-import { createBuiltinRuntimeRegistry, type RuntimeRegistry } from "./registry.js";
+import { createConfiguredRuntimeRegistry, type RuntimeRegistry } from "./registry.js";
 
 export interface DoctorDiagnostic {
   scope: "runtime" | "project" | "storage" | "secret";
@@ -28,7 +28,7 @@ export interface DoctorOptions {
 
 export async function doctor(options: DoctorOptions): Promise<DoctorReport> {
   const diagnostics: DoctorDiagnostic[] = [];
-  const registry = options.registry ?? createBuiltinRuntimeRegistry();
+  const registry = options.registry ?? await createConfiguredRuntimeRegistry(options.config, options.configPath);
   const secretResolver = options.secretResolver ?? new EnvironmentSecretResolver();
 
   for (const runtime of runtimeDescriptors(options.config)) {
@@ -58,7 +58,7 @@ export async function doctor(options: DoctorOptions): Promise<DoctorReport> {
 
   if (options.checkStorage !== false) {
     try {
-      const store = new SqliteRunStore(configDataPath(options.config, options.configPath));
+      const store = new SqliteRunStore(configDataPath(options.config, options.configPath), options.config.storage);
       store.close();
       diagnostics.push({ scope: "storage", id: "sqlite", healthy: true });
     } catch (error) {

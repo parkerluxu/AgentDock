@@ -122,4 +122,8 @@ Authorization: Bearer <api-token>
 
 API 仍然只监听回环地址，token 是同机进程边界的最小认证措施，不等价于 OS/容器沙箱，也未提供 TLS 或远程身份管理。不要通过端口转发、反向代理或防火墙规则把它暴露给其他主机。服务会对运行事件和 API 错误响应做 token 脱敏；SSE 客户端断开会释放连接配额，过慢且持续无法排空的连接会被关闭。
 
+## 数据策略
+
+SQLite 打开时可按 `storage.retentionDays` 清理超过期限的终态 Run；运行中或排队中的 Run 不会被保留策略删除。`storage.saveOutput` 设为 `false` 时，消息、工具参数/结果以及 stdout/stderr 不写入 SQLite，但状态、序号、时间和错误码仍保留。日志级别和额外脱敏键分别由 `logging.level` 与 `redaction.additionalKeys` 配置；默认敏感键和 Secret Resolver 返回值也会遮蔽。详见[配置参考](./configuration-reference.zh-CN.md)。
+
 完整机器可读 schema 可通过带 Bearer token 的 `GET /api/v1/openapi.json` 获取，也保存在源码导出的 `openApiDocument` 中。健康检查同样需要认证。

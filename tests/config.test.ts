@@ -13,6 +13,9 @@ describe("configuration", () => {
     expect(config.runtimes[0]?.args).toEqual([]);
     expect(config.runtimes[0]?.capabilities).toEqual([]);
     expect(config.policies).toEqual([]);
+    expect(config.storage).toEqual({ saveOutput: true });
+    expect(config.logging).toEqual({ level: "warn" });
+    expect(config.redaction).toEqual({ additionalKeys: [] });
   });
 
   it("reports paths for invalid values", () => {

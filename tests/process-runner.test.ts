@@ -29,4 +29,33 @@ describe("ProcessRunner", () => {
     const result = await collectProcessOutput(execution);
     expect(result.exit.timedOut).toBe(true);
   });
+
+  it("cancels a running process through AbortSignal", async () => {
+    const controller = new AbortController();
+    const runner = new ProcessRunner();
+    const execution = runner.execute({
+      command: execPath,
+      args: ["-e", "setTimeout(() => {}, 5000)"],
+      cwd: process.cwd(),
+      env: {},
+      signal: controller.signal,
+    });
+    controller.abort();
+    const result = await collectProcessOutput(execution);
+    expect(result.exit.timedOut).toBeUndefined();
+    expect(result.exit.code).not.toBe(0);
+  });
+
+  it("preserves a non-zero process exit code", async () => {
+    const runner = new ProcessRunner();
+    const execution = runner.execute({
+      command: execPath,
+      args: ["-e", "process.exitCode = 7"],
+      cwd: process.cwd(),
+      env: {},
+    });
+    const result = await collectProcessOutput(execution);
+    expect(result.exit.code).toBe(7);
+    expect(result.exit.timedOut).toBeUndefined();
+  });
 });

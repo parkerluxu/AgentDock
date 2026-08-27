@@ -40,6 +40,12 @@ class FailingAdapter extends FakeAdapter {
   }
 }
 
+class NoTerminalAdapter extends FakeAdapter {
+  public override async *execute(request: AdapterTaskRequest): AsyncIterable<RunEvent> {
+    yield { runId: request.runId, sequence: 0, timestamp: new Date().toISOString(), type: "status", payload: { status: "running" } };
+  }
+}
+
 describe("RunService", () => {
   it("persists adapter events and final status", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentdock-run-service-"));
@@ -71,6 +77,20 @@ describe("RunService", () => {
       expect(results.at(-1)?.run.status).toBe("failed");
       expect(results.at(-1)?.event).toMatchObject({ type: "error", payload: { status: "failed", errorCode: "ADAPTER_EXECUTION_ERROR" } });
       expect(store.getRun(results[0]?.run.id ?? "")?.status).toBe("failed");
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("persists and yields a terminal error when an Adapter omits a terminal event", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agentdock-run-service-no-terminal-"));
+    const store = new SqliteRunStore(join(directory, "agentdock.db"));
+    try {
+      const results = [];
+      for await (const result of new RunService(store).execute({ context, task: "incomplete", adapter: new NoTerminalAdapter() })) results.push(result);
+      expect(results.at(-1)?.event).toMatchObject({ type: "error", payload: { status: "failed", errorCode: "NO_TERMINAL_EVENT" } });
+      expect(store.listEvents(results[0]?.run.id ?? "").at(-1)).toMatchObject({ type: "error", payload: { errorCode: "NO_TERMINAL_EVENT" } });
     } finally {
       store.close();
       rmSync(directory, { recursive: true, force: true });

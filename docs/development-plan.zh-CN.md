@@ -1,7 +1,7 @@
 # AgentDock 分阶段开发计划
 
 > 版本：v0.1（执行基线 + 实施状态）  
-> 日期：2026-08-22  
+> 日期：2026-08-26
 > 关联文档：[需求分析与分阶段路线图](./requirements-analysis.zh-CN.md)
 
 ## 当前实施状态
@@ -12,11 +12,11 @@
 | --- | --- | --- | --- |
 | 阶段 0：规格冻结 | `[x]` 完成 | 领域模型、Adapter 契约、能力矩阵、配置 schema、ADR、状态机 | 仅在 Runtime 版本变化时维护兼容矩阵 |
 | 阶段 1：本地 MVP | `[~]` 核心完成 | Claude Code/Codex、ProcessRunner、Policy/Secret、SQLite Run/Session、CLI、doctor、导出、恢复 | 第 5 周文档/发布验收、多平台与稳定性测试 |
-| 阶段 2：API 与插件化 | `[~]` API 第 1-3 周、SDK 第一切片及 OpenAPI 完成 | 回环 HTTP API、Run 提交/查询/取消、SSE、游标重连、Bearer token、SQLite 幂等、请求/Run 限制、确定性可解释路由、Adapter 公共契约、manifest 校验、Echo Adapter、契约测试辅助函数、OpenAPI schema/发现端点 | 本地 Adapter 生命周期、可靠性验收 |
+| 阶段 2：API 与插件化 | `[~]` 功能开发完成，Beta 验收进行中 | 回环 HTTP API、Run 提交/查询/取消、SSE、游标重连、Bearer token、SQLite 幂等、请求/Run 限制、确定性可解释路由、Adapter 公共契约、manifest 校验、Echo Adapter、契约测试辅助函数、OpenAPI schema/发现端点、本地 Adapter 安装与生命周期、保留/日志/输出/脱敏策略、API/CLI/Adapter 集成回归、迁移与兼容流程、重启恢复和 ProcessRunner 自动化回归 | 真实磁盘故障、Linux/macOS 信号差异、长任务跨进程重启人工验收、正式发布门禁 |
 | 阶段 3：团队治理 | `[ ]` 未开始 | 无 | 阶段 2 API/SDK 稳定后再做用户试点 |
 | 阶段 4：远程执行 | `[ ]` 未开始 | 无 | 必须由阶段 3 的重复需求触发 |
 
-当前自动化基线：18 个测试文件、52 项测试；`npm run typecheck`、`npm test`、`npm run build` 均通过。真实 Claude Code/Codex 调用已在当前机器完成首轮联调；常规自动测试不会消耗模型额度。
+当前自动化基线：22 个测试文件、79 项测试；`npm run typecheck`、`npm test`、`npm run build` 均通过。集成回归覆盖 Echo、本地示例 Adapter、脚本化 Claude/Codex Adapter、SSE 重连、并发幂等、24 Run 突发、并发取消、Adapter 异常、损坏 SQLite 诊断、数据库重开恢复和 ProcessRunner 取消/退出码；真实 Claude Code/Codex 调用已完成首轮联调，常规自动测试不会消耗模型额度。
 
 ## 1. 计划说明
 
@@ -166,7 +166,7 @@
 
 ### 周级计划
 
-#### 第 1 周：API 与事件协议 `[~]`
+#### 第 1 周：API 与事件协议 `[x]`
 
 - `[x]` 将 Run/Session/Runtime 操作映射为版本化 HTTP API，例如 `/api/v1/runs`。
 - `[x]` 固化请求校验、响应错误格式、基础分页、SQLite 幂等键和资源状态字段。
@@ -174,43 +174,46 @@
 - `[x]` 默认仅监听回环地址，并拒绝其他监听地址。
 - `[x]` 为 API schema 生成 OpenAPI 文档和受认证保护的发现端点 `/api/v1/openapi.json`。
 
-#### 第 2 周：本地 API 服务与认证边界 `[~]`
+#### 第 2 周：本地 API 服务与认证边界 `[x]`
 
 - `[x]` 实现本地服务启动、健康检查、优雅关闭和端口冲突诊断。
 - `[x]` 实现 Run 提交、查询、取消、事件订阅和 Session 列表等 P0 API。
 - `[x]` 增加本地 token/进程边界的最小认证方案，禁止日志记录认证信息。
 - `[x]` 增加并发限制、请求超时、请求体大小和输出背压处理。
-- 用 CLI 作为 API 客户端跑一遍端到端回归。
+- `[x]` 用 CLI 和本地示例 Adapter 作为客户端跑通端到端回归。
 
-#### 第 3 周：简单路由与可解释决策 `[~]`
+#### 第 3 周：简单路由与可解释决策 `[x]`
 
 - `[x]` 定义路由输入：所需能力、Project、Policy 要求和 Runtime 健康状态。
 - `[x]` 实现显式 Profile 优先；自动路由仅在候选唯一或 Project 默认明确时执行。
 - `[x]` 输出路由决策说明并写入 Run 不可变 snapshot：候选、拒绝原因、最终选择和解释。
 - `[x]` 对没有可用候选、能力不足、健康异常、歧义和策略冲突编写确定性测试。
 
-#### 第 4 周：Adapter SDK 与 manifest `[~]`
+#### 第 4 周：Adapter SDK 与 manifest `[x]`
 
 - `[x]` 抽取稳定的 Adapter 接口、类型、事件构造器、错误转换器和测试工具。
 - `[x]` 定义 manifest：名称、版本、入口、兼容的 AgentDock API、Runtime 版本范围和所需权限。
 - `[x]` 提供确定性的 Echo Adapter 和本地开发模式。
-- `[ ]` 实现本地 Adapter 的安装、列出、启用、禁用和卸载；第三方 Adapter 默认不自动获得额外权限。
+- `[x]` 实现本地 Adapter 的安装、列出、启用、禁用和卸载；新安装的第三方 Adapter 默认禁用且不授予 manifest 权限。
 - `[x]` 建立契约测试辅助函数，验证健康检查、执行、取消、事件和错误路径。
 
-#### 第 5 周：可靠性、数据策略与集成 `[ ]`
+#### 第 5 周：可靠性、数据策略与集成 `[x]`
 
-- 完善重启恢复、事件游标、重复请求幂等和 Adapter 崩溃处理。
-- 实现数据保留期限、日志级别、输出保存开关和脱敏规则。
-- 完成 API、CLI、Claude Code/Codex 两个内置 Adapter 和示例第三方 Adapter 的集成测试。
-- 编写 API/SDK 迁移指南和兼容矩阵更新流程。
+- `[x]` 完善重启恢复、事件游标、重复请求幂等和 Adapter 崩溃处理；缺少终态的 Adapter 会落盘 `NO_TERMINAL_EVENT`。
+- `[x]` 实现数据保留期限、日志级别、输出保存开关和配置化脱敏规则。
+- `[x]` 完成 API、CLI、Claude Code/Codex 两个内置 Adapter 和仓库示例第三方 Adapter 的集成测试。
+- `[x]` 编写 API/SDK 迁移指南和兼容矩阵更新流程。
 
-#### 第 6 周（可选）：Beta 发布 `[ ]`
+#### 第 6 周（可选）：Beta 发布 `[~]`
 
-- 运行压力、长连接断开重连、并发取消和异常注入测试。
-- 修复 SDK 使用者反馈，冻结 API v1 的破坏性变更规则。
-- 发布 `v0.2.0-api`，提供 API 示例项目和 Adapter 开发教程。
+- `[x]` 运行确定性压力突发、长连接断开重连、并发幂等和 Adapter 异常注入测试。
+- `[x]` 通过损坏 SQLite 诊断、初始化失败句柄清理、数据库重开恢复和事件序号连续性的自动化测试。
+- `[x]` 增加当前 Windows 环境的 AbortSignal 取消和非零退出码回归；Linux/macOS 信号差异仍需对应平台验证。
+- `[ ]` 在真实环境执行磁盘已满、Linux/macOS 信号差异和长任务跨进程重启人工验收。
+- `[x]` 依据迁移指南冻结 API v1 的破坏性变更规则，并提供 API 示例项目和 Adapter 开发教程。
+- `[ ]` 执行 `v0.2.0-api` 的正式打包、CHANGELOG、版本标记和发布流程；这属于外部发布门禁，不在本次工作区内代执行。
 
-**阶段 2 当前退出条件**：`[~]` API 安全边界、跨重启幂等、SSE 生命周期、确定性路由、Adapter SDK 第一切片和 OpenAPI 已完成；本地 Adapter 生命周期、完整跨平台/压力验收仍未完成。
+**阶段 2 当前退出条件**：`[~]` 功能开发、确定性集成回归、数据策略、迁移文档、兼容流程和 SQLite/重启恢复自动化已完成；真实磁盘已满、Linux/macOS 信号差异、长任务跨进程重启和正式版本发布仍需 Beta 门禁，因此暂不标记阶段 2 完成。
 
 ## 6. 阶段 3：团队试点与治理（6-8 周）
 

@@ -2,7 +2,8 @@ import { InvalidRunTransitionError } from "./errors.js";
 import type { RunStatus } from "./types.js";
 
 const transitions: Record<RunStatus, readonly RunStatus[]> = {
-  queued: ["running", "failed", "cancelled", "timed_out"],
+  // A deterministic or cached Adapter may complete before it emits a running event.
+  queued: ["running", "succeeded", "failed", "cancelled", "timed_out"],
   running: ["succeeded", "failed", "cancelled", "timed_out"],
   succeeded: [],
   failed: [],
