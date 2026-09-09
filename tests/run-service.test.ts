@@ -9,9 +9,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const context: ExecutionContext = {
-  runtime: { id: "fake", adapter: "fake", args: [], enabled: true, capabilities: ["execute"] },
-  profile: { id: "default", runtimeId: "fake", policyId: "readonly", settings: {} },
-  policy: { id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" },
+  engine: { id: "fake", adapter: "fake", args: [], enabled: true, capabilities: ["execute"] },
+  agentEnvironment: { id: "default", engineId: "fake", permissionId: "readonly", directoryMode: "managed", launchArgs: [], settings: {} },
+  environmentPermission: { id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" },
   workingDirectory: process.cwd(),
   allowedEnvironmentKeys: [],
   environment: {},
@@ -22,7 +22,7 @@ class FakeAdapter implements AgentAdapter {
   public readonly manifest: AdapterManifest = { name: "fake", version: "0.1.0", entry: "./fake-adapter.js", agentDockApi: "v1", runtime: { id: "fake" }, capabilities: ["execute", "create_session"], requiredPermissions: [] };
   public lastRequest: AdapterTaskRequest | undefined;
 
-  public async healthCheck(): Promise<AdapterHealth> { return { healthy: true, runtime: context.runtime }; }
+  public async healthCheck(): Promise<AdapterHealth> { return { healthy: true, runtime: context.engine }; }
   public async *execute(request: AdapterTaskRequest): AsyncIterable<RunEvent> {
     this.lastRequest = request;
     yield { runId: request.runId, sequence: 0, timestamp: new Date().toISOString(), type: "status", payload: { status: "running" } };

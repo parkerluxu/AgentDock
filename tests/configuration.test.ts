@@ -15,8 +15,8 @@ function createConfig(dataDir?: string) {
   return validateConfig({
     version: 1,
     ...(dataDir ? { dataDir } : {}),
-    runtimes: [],
-    profiles: [],
+    engines: [],
+    environments: [],
     projects: [],
   });
 }

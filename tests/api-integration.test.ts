@@ -95,14 +95,14 @@ class CancellableAdapter implements AgentAdapter {
   public async cancel(): Promise<void> {}
 }
 
-function configFor(runtimeId: string, adapter: string, capabilities: RuntimeDescriptor["capabilities"] = ["execute", "cancel"]): ReturnType<typeof validateConfig> {
+function configFor(engineId: string, adapter: string, capabilities: RuntimeDescriptor["capabilities"] = ["execute", "cancel"]): ReturnType<typeof validateConfig> {
   return validateConfig({
     version: 1,
     dataDir: "data",
-    runtimes: [{ id: runtimeId, adapter, capabilities }],
-    policies: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
-    profiles: [{ id: "default", runtimeId, policyId: "readonly", settings: {} }],
-    projects: [{ id: "workspace", rootDir: process.cwd(), profileIds: ["default"], defaultProfileId: "default" }],
+    engines: [{ id: engineId, adapter, capabilities }],
+    environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
+    environments: [{ id: "default", engineId, permissionId: "readonly", settings: {} }],
+    projects: [{ id: "workspace", rootDir: process.cwd(), environmentIds: ["default"], defaultEnvironmentId: "default" }],
   });
 }
 
@@ -153,27 +153,27 @@ describe("AgentDock API and Adapter integration", () => {
     const config = validateConfig({
       version: 1,
       dataDir: "data",
-      runtimes: [
+      engines: [
         { id: "claude-code", adapter: "claude-code", binary: "claude", capabilities: ["execute", "stream_events", "cancel", "create_session", "resume_session", "healthcheck"] },
         { id: "codex", adapter: "codex", binary: "codex", capabilities: ["execute", "stream_events", "cancel", "resume_session", "healthcheck"] },
       ],
-      policies: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
-      profiles: [
-        { id: "claude", runtimeId: "claude-code", policyId: "readonly", settings: { outputFormat: "stream-json" } },
-        { id: "codex", runtimeId: "codex", policyId: "readonly", settings: { skipGitRepoCheck: true } },
+      environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
+      environments: [
+        { id: "claude", engineId: "claude-code", permissionId: "readonly", settings: { outputFormat: "stream-json" } },
+        { id: "codex", engineId: "codex", permissionId: "readonly", settings: { skipGitRepoCheck: true } },
       ],
-      projects: [{ id: "workspace", rootDir: process.cwd(), profileIds: ["claude", "codex"], defaultProfileId: "claude" }],
+      projects: [{ id: "workspace", rootDir: process.cwd(), environmentIds: ["claude", "codex"], defaultEnvironmentId: "claude" }],
     });
     const runner = new ScriptedProcessRunner();
     const api = createAgentDockApiServer({ config, configPath: join(directory, "config.json"), store, registry: createBuiltinRuntimeRegistry(runner), apiToken: token });
     try {
       const address = await api.listen();
       const url = `http://${address.host}:${address.port}/api/v1/runs`;
-      for (const [profileId, task] of [["claude", "claude integration"], ["codex", "codex integration"]] as const) {
+      for (const [environmentId, task] of [["claude", "claude integration"], ["codex", "codex integration"]] as const) {
         const response = await fetch(url, {
           method: "POST",
           headers: authHeaders({ "content-type": "application/json" }),
-          body: JSON.stringify({ task, projectId: "workspace", profileId }),
+          body: JSON.stringify({ task, projectId: "workspace", environmentId }),
         });
         expect(response.status).toBe(202);
         const runId = runIdFromBody(await response.json());

@@ -22,6 +22,8 @@ const runtimeSchema = z.object({
   capabilities: z.array(runtimeCapability).default([]),
 });
 
+const engineSchema = runtimeSchema;
+
 const secretReferenceSchema = z.object({
   provider: z.enum(["env", "keychain", "custom"]),
   key: z.string().min(1),
@@ -40,19 +42,43 @@ const policySchema = z.object({
   network: z.enum(["deny", "allow"]).default("deny"),
 });
 
-const profileSchema = z.object({
+const environmentPermissionSchema = policySchema;
+
+const environmentSchema = z.object({
   id: identifier,
-  runtimeId: identifier,
-  policyId: identifier,
+  /** Legacy placement; new configs bind these through agents[]. */
+  engineId: identifier.optional(),
+  permissionId: identifier.optional(),
   extends: identifier.optional(),
+  directoryMode: z.enum(["managed", "external"]).default("managed"),
+  /** Complete native Agent home, including config, skills, plugins and related files. */
+  homeDir: z.string().min(1).optional(),
+  configDir: z.string().min(1).optional(),
+  stateDir: z.string().min(1).optional(),
+  cacheDir: z.string().min(1).optional(),
+  launchArgs: z.array(z.string()).default([]),
+  settings: z.record(z.unknown()).default({}),
+});
+
+const agentSchema = z.object({
+  id: identifier,
+  engineId: identifier,
+  environmentId: identifier,
+  permissionId: identifier,
+  enabled: z.boolean().default(true),
+  /** Non-secret variables overlaid on the child process environment. */
+  processEnv: z.record(z.string()).default({}),
   settings: z.record(z.unknown()).default({}),
 });
 
 const projectSchema = z.object({
   id: identifier,
   rootDir: z.string().min(1),
-  profileIds: z.array(identifier).default([]),
-  defaultProfileId: identifier.optional(),
+  agentIds: z.array(identifier).default([]),
+  defaultAgentId: identifier.optional(),
+  /** Legacy placement; new configs bind Agents instead. */
+  environmentIds: z.array(identifier).default([]),
+  defaultEnvironmentId: identifier.optional(),
 });
 
 const storageSchema = z.object({
@@ -77,21 +103,18 @@ export const configSchema = z.object({
   storage: storageSchema,
   logging: loggingSchema,
   redaction: redactionSchema,
-  runtimes: z.array(runtimeSchema).default([]),
-  profiles: z.array(profileSchema).default([]),
+  engines: z.array(engineSchema).default([]),
+  environments: z.array(environmentSchema).default([]),
+  agents: z.array(agentSchema).default([]),
   projects: z.array(projectSchema).default([]),
-  policies: z.array(policySchema).default([]),
-});
+  environmentPermissions: z.array(environmentPermissionSchema).default([]),
+}).strict();
 
 export type AgentDockConfig = z.infer<typeof configSchema>;
 
-export type ConfigRuntime = AgentDockConfig["runtimes"][number] & {
-  capabilities: RuntimeCapability[];
-};
-
-export type ConfigPolicy = AgentDockConfig["policies"][number] & {
-  network: NetworkPolicy;
-};
+export type ConfigEngine = AgentDockConfig["engines"][number] & { capabilities: RuntimeCapability[] };
+export type ConfigEnvironment = AgentDockConfig["environments"][number];
+export type ConfigEnvironmentPermission = AgentDockConfig["environmentPermissions"][number] & { network: NetworkPolicy };
 
 export function parseConfig(input: unknown): AgentDockConfig {
   return configSchema.parse(input);

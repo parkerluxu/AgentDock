@@ -4,7 +4,7 @@ import { createMemoryRepository } from "../src/storage/repository.js";
 describe("memory repository", () => {
   it("upserts, lists and deletes entities by stable id", () => {
     const repository = createMemoryRepository();
-    repository.runtimes.upsert({
+    repository.engines.upsert({
       id: "codex",
       adapter: "codex",
       args: [],
@@ -12,10 +12,10 @@ describe("memory repository", () => {
       capabilities: ["execute"],
     });
 
-    expect(repository.runtimes.get("codex")?.adapter).toBe("codex");
-    expect(repository.runtimes.list()).toHaveLength(1);
-    expect(repository.runtimes.delete("codex")).toBe(true);
-    expect(repository.runtimes.get("codex")).toBeUndefined();
-    expect(repository.runtimes.delete("missing")).toBe(false);
+    expect(repository.engines.get("codex")?.adapter).toBe("codex");
+    expect(repository.engines.list()).toHaveLength(1);
+    expect(repository.engines.delete("codex")).toBe(true);
+    expect(repository.engines.get("codex")).toBeUndefined();
+    expect(repository.engines.delete("missing")).toBe(false);
   });
 });

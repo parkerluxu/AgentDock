@@ -13,7 +13,7 @@ export class SessionService {
     return this.store.createSession({
       id: randomUUID(),
       ...(context.project ? { projectId: context.project.id } : {}),
-      runtimeId: context.runtime.id,
+      engineId: context.engine.id,
       resumable: reference.supported && reference.state !== "pending",
       ...(reference.runtimeSessionId ? { runtimeSessionId: reference.runtimeSessionId } : {}),
     });

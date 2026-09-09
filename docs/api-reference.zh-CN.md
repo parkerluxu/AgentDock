@@ -31,12 +31,33 @@ Authorization: Bearer <api-token>
 
 ## 资源与端点
 
+启动 API 后访问 `http://127.0.0.1:<port>/` 可打开内置 Control Center；`/ui` 和 `/ui/` 也指向同一页面。页面支持中文/英文切换：首次打开默认跟随浏览器语言，手动选择会保存在当前浏览器本地。页面不会把 token 放入 URL，首次打开时在浏览器中输入 API 启动输出的本地 token。控制台提供 Engine/Environment/Project/Session/Run 的查看和 Run 详情，也提供受保护的配置编辑入口。
+
+### 配置编辑 API
+
+配置写入仅允许回环 API 的 Bearer token 客户端调用。`GET /config` 返回规范化配置和内容 `revision/hash`；保存或恢复必须携带这两个值，服务会在写入前重新读取配置，发现并发修改时返回 `409 CONFIG_CONFLICT`。配置候选先经过同一份 schema、跨对象引用和 Environment Permission 校验；`POST /config/preview` 还可返回 `dryRun`、差异和高风险变更说明。
+
+`PUT /config` 使用同目录临时文件和原子替换，成功前保留带随机标识的备份，返回 `restartRequired: true`。写入、网络、shell/command 或 Secret Reference 变化会返回高风险说明；请求必须明确设置 `confirmHighRisk: true` 才能保存。明文 secret 不接受，配置中只能使用 `environment.secretRefs`。审计事件追加到配置文件同目录的 `config-audit.jsonl`，只记录版本、差异路径和风险摘要，不记录配置值。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | API 服务自身的健康检查。 |
 | `GET` | `/api/v1/openapi.json` | 获取当前 API v1 的 OpenAPI 3.0 schema。 |
-| `GET` | `/api/v1/runtimes` | 配置中的 Runtime 描述符。 |
+| `GET` | `/api/v1/engines` | 配置中的 Agent Engine 描述符。 |
+| `GET/POST` | `/api/v1/environments` | 列出或创建 Agent Environment。 |
+| `GET/PUT/DELETE` | `/api/v1/environments/:environmentId` | 查看、修改或移除 Environment 配置；删除不会删除目录。 |
+| `POST` | `/api/v1/environments/:environmentId/rescan` | 重新扫描配置目录并更新 manifest/hash。 |
+| `POST` | `/api/v1/environments/:environmentId/copy` | 复制配置目录到新的 managed Environment。 |
+| `POST` | `/api/v1/environments/import` | 从现有目录导入 Environment 配置。 |
+| `GET/POST` | `/api/v1/environments/:environmentId/backups` | 列出或创建 Environment 配置备份。 |
+| `POST` | `/api/v1/environments/:environmentId/restore` | 恢复 Environment 配置备份。 |
 | `GET` | `/api/v1/sessions` | 本地 Session 列表。 |
+| `GET` | `/api/v1/projects` | 配置中的 Project 列表。 |
+| `GET` | `/api/v1/config` | 获取配置快照、revision 和 hash。 |
+| `POST` | `/api/v1/config/preview` | 校验候选配置并返回 Policy、dry-run、风险和差异预览。 |
+| `PUT` | `/api/v1/config` | 按 revision/hash 原子保存配置；成功后需要重启 API 服务。 |
+| `GET` | `/api/v1/config/backups` | 列出可恢复的配置备份。 |
+| `POST` | `/api/v1/config/restore` | 按备份 ID 恢复配置，同样执行并发检查和原子写入。 |
 | `GET` | `/api/v1/runs?status=&projectId=&limit=` | Run 列表；`status` 必须是有效的统一 Run 状态。 |
 | `POST` | `/api/v1/runs` | 创建并异步执行一个 Run。 |
 | `GET` | `/api/v1/runs/:runId` | 获取 Run 与不可变执行快照。 |
@@ -54,14 +75,14 @@ Idempotency-Key: review-20260822-001
 {
   "task": "审查当前仓库的测试失败原因",
   "projectId": "agentdock",
-  "profileId": "claude-code-readonly",
+  "environmentId": "claude-code-readonly",
   "requiredCapabilities": ["execute", "stream_events"],
   "network": "deny",
   "filesystemWrite": false
 }
 ```
 
-`task` 是唯一必填字段。`profileId`、`projectId` 和 `sessionId` 对应 CLI 的同名选择条件。`requiredCapabilities`、`network` 和 `filesystemWrite` 是可选的路由要求。未明确选择 Profile 时，路由依次使用 Project 默认 Profile、唯一满足要求的候选；多个候选同时满足时返回 `409 AMBIGUOUS_ROUTE`，不会猜测。
+`task` 是唯一必填字段。`environmentId`、`projectId` 和 `sessionId` 对应 CLI 的选择条件。`requiredCapabilities`、`network` 和 `filesystemWrite` 是可选的路由要求。未明确选择 Environment 时，路由依次使用 Project 默认 Environment、唯一满足要求的候选；多个候选同时满足时返回 `409 AMBIGUOUS_ROUTE`，不会猜测。
 
 成功的新请求返回 `202 Accepted`：
 
@@ -73,8 +94,8 @@ Idempotency-Key: review-20260822-001
     "snapshot": {
       "routing": {
         "mode": "project_default",
-        "profileId": "claude-code-readonly",
-        "runtimeId": "claude-code",
+        "environmentId": "claude-code-readonly",
+        "engineId": "claude-code",
         "candidates": [],
         "explanation": "..."
       }

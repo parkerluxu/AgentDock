@@ -12,7 +12,7 @@ describe("fault recovery diagnostics", () => {
     const databasePath = join(directory, "data", "agentdock.db");
     mkdirSync(join(directory, "data"), { recursive: true });
     writeFileSync(databasePath, "this is not a sqlite database");
-    const config = validateConfig({ version: 1, dataDir: "data", runtimes: [], profiles: [], projects: [], policies: [] });
+    const config = validateConfig({ version: 1, dataDir: "data", engines: [], environments: [], projects: [], environmentPermissions: [] });
     try {
       const report = await doctor({ config, configPath: join(directory, "config.json"), registry: new RuntimeRegistry() });
       expect(report.healthy).toBe(false);

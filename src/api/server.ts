@@ -3,18 +3,22 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
-import { loadConfig } from "../config/load.js";
+import { ConfigValidationError, loadConfig } from "../config/load.js";
+import { ConfigEditor, ConfigEditorError, type ConfigDryRunRequest, type ConfigPreview, type ConfigSaveResult } from "../config/editor.js";
 import type { AgentDockConfig } from "../config/schema.js";
 import type { NetworkPolicy, Run, RunEvent, RunRouteSnapshot, RunStatus, RuntimeCapability } from "../core/types.js";
 import { redactSensitiveValue, type RedactionOptions } from "../core/redaction.js";
 import { AgentDockLogger, type Logger } from "../core/logger.js";
 import { resolveExecutionContext } from "../policy/resolver.js";
-import { configBaseDirectory, configDataPath, runtimeDescriptors } from "../runtime/configuration.js";
+import { configBaseDirectory, configDataPath } from "../runtime/configuration.js";
 import { createBuiltinRuntimeRegistry, createConfiguredRuntimeRegistry, type RuntimeRegistry } from "../runtime/registry.js";
 import { RunService } from "../runtime/run-service.js";
 import { SqliteRunStore } from "../storage/sqlite-run-store.js";
 import { resolveRoute, RouteResolutionError, type RuntimeHealthStatus } from "../runtime/router.js";
 import { openApiDocument } from "./openapi.js";
+import { webAppHtml } from "../web/index.js";
+import { EnvironmentDirectoryManager, EnvironmentManagerError, readEnvironmentManifestSync } from "../environment/manager.js";
+import { configuredAgents, environmentCatalog } from "../config/model.js";
 
 const API_PREFIX = "/api/v1";
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
@@ -26,7 +30,8 @@ const MAX_RUN_LIST_LIMIT = 1_000;
 
 export interface StartRunRequest {
   task: string;
-  profileId?: string;
+  agentId?: string;
+  environmentId?: string;
   projectId?: string;
   sessionId?: string;
   idempotencyKey?: string;
@@ -45,7 +50,7 @@ export interface AgentDockApiServerOptions {
   maxConcurrentRequests?: number;
   maxConcurrentRuns?: number;
   apiToken?: string;
-  runtimeHealth?: Readonly<Record<string, RuntimeHealthStatus>>;
+  engineHealth?: Readonly<Record<string, RuntimeHealthStatus>>;
   logger?: Logger;
   redaction?: RedactionOptions;
 }
@@ -91,6 +96,7 @@ class LocalRunManager {
   private readonly pendingControllers = new Set<AbortController>();
   private readonly startOperations = new Set<Promise<{ run: Run; created: boolean }>>();
   private readonly pendingIdempotentStarts = new Map<string, PendingIdempotentStart>();
+  private readonly environmentScans = new Map<string, Promise<void>>();
   private pendingStarts = 0;
   private closing = false;
 
@@ -101,7 +107,7 @@ class LocalRunManager {
     private readonly registry: RuntimeRegistry,
     private readonly maxConcurrentRuns: number,
     private readonly sensitiveValues: readonly string[],
-    private readonly runtimeHealth: Readonly<Record<string, RuntimeHealthStatus>> | undefined,
+    private readonly engineHealth: Readonly<Record<string, RuntimeHealthStatus>> | undefined,
     private readonly logger: Logger,
     private readonly redaction: RedactionOptions,
   ) {
@@ -158,28 +164,33 @@ class LocalRunManager {
     let startPending = true;
     try {
       const routing = resolveRoute(this.config, {
-        ...(input.profileId ? { profileId: input.profileId } : {}),
+        ...(input.agentId ? { agentId: input.agentId } : {}),
+        ...(input.environmentId ? { environmentId: input.environmentId } : {}),
         ...(input.projectId ? { projectId: input.projectId } : {}),
         requirements: {
           ...(input.requiredCapabilities ? { requiredCapabilities: input.requiredCapabilities } : {}),
           ...(input.network ? { network: input.network } : {}),
           ...(input.filesystemWrite !== undefined ? { filesystemWrite: input.filesystemWrite } : {}),
         },
-        ...(this.runtimeHealth ? { runtimeHealth: this.runtimeHealth } : {}),
+        ...(this.engineHealth ? { engineHealth: this.engineHealth } : {}),
       });
+      // Freeze a freshly scanned native configuration in the Run snapshot.
+      // This creates only AgentDock-managed metadata/directories and never clears state/cache.
+      await this.ensureEnvironmentReady(routing.environmentId);
       const context = resolveExecutionContext({
         config: this.config,
         baseDirectory: configBaseDirectory(this.configPath),
-        profileId: routing.profileId,
+        ...(routing.agentId ? { agentId: routing.agentId } : {}),
+        environmentId: routing.environmentId,
         ...(input.projectId ? { projectId: input.projectId } : {}),
       });
-      if (input.sessionId) this.validateSession(input.sessionId, context.runtime.id);
+      if (input.sessionId) this.validateSession(input.sessionId, context.engine.id);
 
       const runId = reservation?.runId ?? randomUUID();
       const iterator = this.runService.execute({
         context,
         task: input.task,
-        adapter: this.registry.create(context.runtime),
+        adapter: this.registry.create(context.engine),
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         runId,
         signal: controller.signal,
@@ -204,6 +215,20 @@ class LocalRunManager {
     } finally {
       this.pendingControllers.delete(controller);
     }
+  }
+
+  private async ensureEnvironmentReady(environmentId: string): Promise<void> {
+    const existing = this.environmentScans.get(environmentId);
+    if (existing) return existing;
+    const operation = (async (): Promise<void> => {
+      const directories = new EnvironmentDirectoryManager(this.config, configBaseDirectory(this.configPath));
+      const status = await directories.inspect(environmentId);
+      if (status.drifted) throw new ApiRequestError(409, "ENVIRONMENT_RESCAN_REQUIRED", `Environment "${environmentId}" changed outside AgentDock. Rescan it before running.`);
+      if (!status.manifest) await directories.rescan(environmentId);
+      else if (!status.healthy) throw new ApiRequestError(422, "ENVIRONMENT_DIRECTORY_INVALID", status.issues.join("; "));
+    })();
+    this.environmentScans.set(environmentId, operation);
+    try { await operation; } finally { this.environmentScans.delete(environmentId); }
   }
 
   private reserveIdempotency(key: string, requestHash: string): IdempotencyReservation & { status: "created" | "existing" | "in_progress" | "conflict" } {
@@ -285,11 +310,11 @@ class LocalRunManager {
     for (const listener of this.listeners.get(event.runId) ?? []) listener(event);
   }
 
-  private validateSession(sessionId: string, runtimeId: string): void {
+  private validateSession(sessionId: string, engineId: string): void {
     const session = this.store.getSession(sessionId);
     if (!session) throw new ApiRequestError(404, "SESSION_NOT_FOUND", `Session "${sessionId}" was not found.`);
-    if (session.runtimeId !== runtimeId) {
-      throw new ApiRequestError(409, "SESSION_RUNTIME_MISMATCH", `Session "${sessionId}" belongs to Runtime "${session.runtimeId}", not "${runtimeId}".`);
+    if (session.engineId !== engineId) {
+      throw new ApiRequestError(409, "SESSION_ENGINE_MISMATCH", `Session "${sessionId}" belongs to Engine "${session.engineId}", not "${engineId}".`);
     }
     if (session.status !== "active") throw new ApiRequestError(409, "SESSION_ARCHIVED", `Session "${sessionId}" is archived and cannot accept a new Run.`);
   }
@@ -315,10 +340,11 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
     options.registry ?? createBuiltinRuntimeRegistry(),
     maxConcurrentRuns,
     apiToken ? [apiToken] : [],
-    options.runtimeHealth,
+    options.engineHealth,
     logger,
     redaction,
   );
+  const configEditor = new ConfigEditor(options.configPath, options.config);
   const streams = new Set<ServerResponse>();
   const maxRequestBodyBytes = options.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES;
   validatePositiveInteger(maxRequestBodyBytes, "maxRequestBodyBytes");
@@ -338,6 +364,20 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
       holdsRequestSlot = true;
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       const path = url.pathname;
+      if (request.method === "GET" && (path === "/" || path === "/ui" || path === "/ui/")) {
+        response.writeHead(200, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+          "content-length": Buffer.byteLength(webAppHtml),
+        });
+        response.end(webAppHtml);
+        return;
+      }
+      if (request.method === "GET" && path === "/favicon.ico") {
+        response.writeHead(204, { "cache-control": "public, max-age=86400" });
+        response.end();
+        return;
+      }
       authenticate(request, apiToken);
 
       if (request.method === "GET" && path === `${API_PREFIX}/openapi.json`) {
@@ -348,13 +388,237 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         writeJson(response, 200, { healthy: true, apiVersion: "v1" }, apiToken ? [apiToken] : [], redaction);
         return;
       }
-      if (request.method === "GET" && path === `${API_PREFIX}/runtimes`) {
-        writeJson(response, 200, { runtimes: runtimeDescriptors(options.config) }, apiToken ? [apiToken] : [], redaction);
-        return;
-      }
       if (request.method === "GET" && path === `${API_PREFIX}/sessions`) {
         writeJson(response, 200, { sessions: store.listSessions() }, apiToken ? [apiToken] : [], redaction);
         return;
+      }
+      if (request.method === "GET" && (path === `${API_PREFIX}/projects` || path === `${API_PREFIX}/workspaces`)) {
+        writeJson(response, 200, { projects: options.config.projects }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+      const projectEnvironments = /^\/api\/v1\/(?:projects|workspaces)\/([^/]+)\/environments$/.exec(path);
+      if (request.method === "PUT" && projectEnvironments?.[1]) {
+        requireJsonContentType(request);
+        const projectId = decodeURIComponent(projectEnvironments[1]);
+        const body = requiredObject(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs), "The Project Environment binding body must be a JSON object.");
+        const environmentIds = parseStringArray(body.environmentIds, "environmentIds");
+        const defaultEnvironmentId = optionalString(body.defaultEnvironmentId, "defaultEnvironmentId");
+        const snapshot = await configEditor.snapshot();
+        const index = snapshot.config.projects.findIndex((item) => item.id === projectId);
+        if (index < 0) throw new ApiRequestError(404, "PROJECT_NOT_FOUND", `Project "${projectId}" was not found.`);
+        const candidate = structuredClone(snapshot.config);
+        const project = candidate.projects[index] as AgentDockConfig["projects"][number];
+        project.environmentIds = environmentIds;
+        if (defaultEnvironmentId) project.defaultEnvironmentId = defaultEnvironmentId;
+        else delete project.defaultEnvironmentId;
+        const result = await configEditor.save(
+          candidate,
+          requiredString(body.revision, "revision"),
+          requiredString(body.hash, "hash"),
+          body.confirmHighRisk === undefined ? false : parseBoolean(body.confirmHighRisk, "confirmHighRisk"),
+        );
+        writeJson(response, 200, { project: result.current.config.projects[index], ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+        if (request.method === "GET" && path === `${API_PREFIX}/engines`) {
+        const snapshot = await configEditor.snapshot();
+        writeJson(response, 200, { engines: environmentCatalog(snapshot.config).engines }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+      if (request.method === "GET" && path === `${API_PREFIX}/environments`) {
+        const snapshot = await configEditor.snapshot();
+        const environments = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).list();
+        writeJson(response, 200, { environments }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+      if (request.method === "POST" && path === `${API_PREFIX}/environments`) {
+        requireJsonContentType(request);
+        const input = parseEnvironmentMutation(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        const snapshot = await configEditor.snapshot();
+        if (environmentCatalog(snapshot.config).environments.some((item) => item.id === input.environment.id)) {
+          throw new ApiRequestError(409, "ENVIRONMENT_ALREADY_EXISTS", `Environment "${input.environment.id}" already exists.`);
+        }
+        const candidate = structuredClone(snapshot.config);
+        candidate.environments.push(input.environment);
+        const preview = await configEditor.preview(candidate);
+        await new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath)).rescan(input.environment.id);
+        const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
+        const manifest = readEnvironmentManifest(result.current.config, options.configPath, input.environment.id);
+        writeJson(response, 201, { environment: input.environment, manifest, ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+      if (request.method === "GET" && path === `${API_PREFIX}/config`) {
+        const snapshot = await configEditor.snapshot();
+        writeJson(response, 200, snapshot, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+      if (request.method === "POST" && path === `${API_PREFIX}/config/preview`) {
+        requireJsonContentType(request);
+        const input = parseConfigPreviewRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        const preview = await configEditor.preview(input.config, input.dryRun);
+        writeJson(response, 200, serializeConfigPreview(preview), apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+      if (request.method === "PUT" && path === `${API_PREFIX}/config`) {
+        requireJsonContentType(request);
+        const input = parseConfigSaveRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        const result = await configEditor.save(input.config, input.revision, input.hash, input.confirmHighRisk, input.dryRun);
+        writeJson(response, 200, {
+          config: result.current.config,
+          revision: result.current.revision,
+          hash: result.current.hash,
+          diff: result.diff,
+          highRisk: result.highRisk,
+          backupId: result.backupId,
+          auditId: result.auditId,
+          restartRequired: result.restartRequired,
+          ...(result.dryRun ? { dryRun: result.dryRun } : {}),
+        }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+      if (request.method === "GET" && path === `${API_PREFIX}/config/backups`) {
+        writeJson(response, 200, { backups: await configEditor.backups() }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+      if (request.method === "POST" && path === `${API_PREFIX}/config/restore`) {
+        requireJsonContentType(request);
+        const input = parseConfigRestoreRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        const result = await configEditor.restore(input.backupId, input.revision, input.hash, input.confirmHighRisk);
+        writeJson(response, 200, {
+          config: result.current.config,
+          revision: result.current.revision,
+          hash: result.current.hash,
+          diff: result.diff,
+          highRisk: result.highRisk,
+          backupId: result.backupId,
+          auditId: result.auditId,
+          restartRequired: result.restartRequired,
+        }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+
+      const environmentCopy = /^\/api\/v1\/environments\/([^/]+)\/copy$/.exec(path);
+      if (request.method === "POST" && environmentCopy?.[1]) {
+        requireJsonContentType(request);
+        const sourceId = decodeURIComponent(environmentCopy[1]);
+        const input = parseEnvironmentMutation(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        if (input.environment.directoryMode !== "managed") throw new ApiRequestError(422, "ENVIRONMENT_DIRECTORY_INVALID", "A copied Environment must use managed directories.");
+        const snapshot = await configEditor.snapshot();
+        if (!environmentCatalog(snapshot.config).environments.some((item) => item.id === sourceId)) throw new ApiRequestError(404, "ENVIRONMENT_NOT_FOUND", `Environment "${sourceId}" was not found.`);
+        if (environmentCatalog(snapshot.config).environments.some((item) => item.id === input.environment.id)) throw new ApiRequestError(409, "ENVIRONMENT_ALREADY_EXISTS", `Environment "${input.environment.id}" already exists.`);
+        const candidate = structuredClone(snapshot.config);
+        candidate.environments.push(input.environment);
+        const preview = await configEditor.preview(candidate);
+        const directories = new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath));
+        await directories.copyConfig(sourceId, input.environment.id);
+        const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
+        writeJson(response, 201, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, input.environment.id), ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+
+      if (request.method === "POST" && path === `${API_PREFIX}/environments/import`) {
+        requireJsonContentType(request);
+        const input = parseEnvironmentImport(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        const snapshot = await configEditor.snapshot();
+        if (environmentCatalog(snapshot.config).environments.some((item) => item.id === input.environment.id)) throw new ApiRequestError(409, "ENVIRONMENT_ALREADY_EXISTS", `Environment "${input.environment.id}" already exists.`);
+        const candidate = structuredClone(snapshot.config);
+        candidate.environments.push(input.environment);
+        const preview = await configEditor.preview(candidate);
+        await new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath)).importConfig(input.sourceConfigDir, input.environment.id);
+        const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
+        writeJson(response, 201, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, input.environment.id), ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+
+      const environmentRescan = /^\/api\/v1\/environments\/([^/]+)\/rescan$/.exec(path);
+      if (request.method === "POST" && environmentRescan?.[1]) {
+        const snapshot = await configEditor.snapshot();
+        const manifest = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).rescan(decodeURIComponent(environmentRescan[1]));
+        writeJson(response, 200, { manifest }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+
+      const environmentBackups = /^\/api\/v1\/environments\/([^/]+)\/backups$/.exec(path);
+      if (environmentBackups?.[1]) {
+        const environmentId = decodeURIComponent(environmentBackups[1]);
+        const snapshot = await configEditor.snapshot();
+        const directories = new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath));
+        if (request.method === "GET") {
+          writeJson(response, 200, { backups: await directories.backups(environmentId) }, apiToken ? [apiToken] : [], redaction);
+          return;
+        }
+        if (request.method === "GET" && path === `${API_PREFIX}/agents`) {
+          const snapshot = await configEditor.snapshot();
+          writeJson(response, 200, { agents: configuredAgents(snapshot.config) }, apiToken ? [apiToken] : [], redaction);
+          return;
+        }
+        if (request.method === "POST") {
+          writeJson(response, 201, { backup: await directories.backup(environmentId) }, apiToken ? [apiToken] : [], redaction);
+          return;
+        }
+      }
+
+      const environmentRestore = /^\/api\/v1\/environments\/([^/]+)\/restore$/.exec(path);
+      if (request.method === "POST" && environmentRestore?.[1]) {
+        requireJsonContentType(request);
+        const body = requiredObject(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs), "The Environment restore body must be a JSON object.");
+        const snapshot = await configEditor.snapshot();
+        const manifest = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).restore(
+          decodeURIComponent(environmentRestore[1]),
+          requiredString(body.backupId, "backupId"),
+          body.confirmExternal === undefined ? false : parseBoolean(body.confirmExternal, "confirmExternal"),
+        );
+        writeJson(response, 200, { manifest }, apiToken ? [apiToken] : [], redaction);
+        return;
+      }
+
+      const environmentRoute = /^\/api\/v1\/environments\/([^/]+)$/.exec(path);
+      if (environmentRoute?.[1]) {
+        const environmentId = decodeURIComponent(environmentRoute[1]);
+        const snapshot = await configEditor.snapshot();
+        if (request.method === "GET") {
+          const status = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).inspect(environmentId);
+          writeJson(response, 200, status, apiToken ? [apiToken] : [], redaction);
+          return;
+        }
+        if (request.method === "PUT") {
+          requireJsonContentType(request);
+          const input = parseEnvironmentMutation(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+          if (input.environment.id !== environmentId) throw new ApiRequestError(400, "INVALID_REQUEST", "The Environment id in the body must match the URL.");
+          const index = snapshot.config.environments.findIndex((item) => item.id === environmentId);
+          if (index < 0) throw new ApiRequestError(404, "ENVIRONMENT_NOT_FOUND", `Environment "${environmentId}" was not found.`);
+          const candidate = structuredClone(snapshot.config);
+          candidate.environments[index] = input.environment;
+          const preview = await configEditor.preview(candidate);
+          await new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath)).rescan(environmentId);
+          const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
+          writeJson(response, 200, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, environmentId), ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+          return;
+        }
+        if (request.method === "DELETE") {
+          requireJsonContentType(request);
+          const body = requiredObject(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs), "The Environment delete body must be a JSON object.");
+          const index = snapshot.config.environments.findIndex((item) => item.id === environmentId);
+          if (index < 0) throw new ApiRequestError(404, "ENVIRONMENT_NOT_FOUND", `Environment "${environmentId}" was not found.`);
+          const candidate = structuredClone(snapshot.config);
+          candidate.environments.splice(index, 1);
+          candidate.projects = candidate.projects.map((project) => {
+            const next = {
+              ...project,
+              ...(project.environmentIds ? { environmentIds: project.environmentIds.filter((id) => id !== environmentId) } : {}),
+            };
+            if (next.defaultEnvironmentId === environmentId) delete next.defaultEnvironmentId;
+            return next;
+          });
+          const result = await configEditor.save(
+            candidate,
+            requiredString(body.revision, "revision"),
+            requiredString(body.hash, "hash"),
+            body.confirmHighRisk === undefined ? false : parseBoolean(body.confirmHighRisk, "confirmHighRisk"),
+          );
+          writeJson(response, 200, { deleted: true, directoriesPreserved: true, ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+          return;
+        }
       }
       if (request.method === "GET" && path === `${API_PREFIX}/runs`) {
         const status = parseRunStatus(url.searchParams.get("status"));
@@ -501,7 +765,8 @@ function parseStartRunRequest(body: unknown): Omit<StartRunRequest, "idempotency
   if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiRequestError(400, "INVALID_REQUEST", "The request body must be a JSON object.");
   const input = body as Record<string, unknown>;
   const task = requiredString(input.task, "task");
-  const profileId = optionalString(input.profileId, "profileId");
+  const agentId = optionalString(input.agentId, "agentId");
+  const environmentId = optionalString(input.environmentId, "environmentId");
   const projectId = optionalString(input.projectId, "projectId");
   const sessionId = optionalString(input.sessionId, "sessionId");
   const idempotencyKey = input.idempotencyKey === undefined ? undefined : parseIdempotencyKey(requiredString(input.idempotencyKey, "idempotencyKey"));
@@ -510,7 +775,8 @@ function parseStartRunRequest(body: unknown): Omit<StartRunRequest, "idempotency
   const filesystemWrite = input.filesystemWrite === undefined ? undefined : parseBoolean(input.filesystemWrite, "filesystemWrite");
   return {
     task,
-    ...(profileId ? { profileId } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(environmentId ? { environmentId } : {}),
     ...(projectId ? { projectId } : {}),
     ...(sessionId ? { sessionId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -518,6 +784,126 @@ function parseStartRunRequest(body: unknown): Omit<StartRunRequest, "idempotency
     ...(network ? { network } : {}),
     ...(filesystemWrite !== undefined ? { filesystemWrite } : {}),
   };
+}
+
+interface ConfigPreviewRequest {
+  config: unknown;
+  dryRun?: ConfigDryRunRequest;
+}
+
+interface ConfigSaveRequest extends ConfigPreviewRequest {
+  revision: string;
+  hash: string;
+  confirmHighRisk: boolean;
+}
+
+interface ConfigRestoreRequest {
+  backupId: string;
+  revision: string;
+  hash: string;
+  confirmHighRisk: boolean;
+}
+
+interface EnvironmentMutationRequest {
+  environment: AgentDockConfig["environments"][number];
+  revision: string;
+  hash: string;
+  confirmHighRisk: boolean;
+}
+
+interface EnvironmentImportRequest extends EnvironmentMutationRequest {
+  sourceConfigDir: string;
+}
+
+function parseEnvironmentMutation(body: unknown): EnvironmentMutationRequest {
+  const input = requiredObject(body, "The Environment request body must be a JSON object.");
+  const environment = requiredObject(input.environment, "The request must include an Environment object.") as unknown as AgentDockConfig["environments"][number];
+  return {
+    environment,
+    revision: requiredString(input.revision, "revision"),
+    hash: requiredString(input.hash, "hash"),
+    confirmHighRisk: input.confirmHighRisk === undefined ? false : parseBoolean(input.confirmHighRisk, "confirmHighRisk"),
+  };
+}
+
+function parseEnvironmentImport(body: unknown): EnvironmentImportRequest {
+  const input = requiredObject(body, "The Environment import body must be a JSON object.");
+  return { ...parseEnvironmentMutation(input), sourceConfigDir: requiredString(input.sourceConfigDir, "sourceConfigDir") };
+}
+
+function parseConfigPreviewRequest(body: unknown): ConfigPreviewRequest {
+  const input = requiredObject(body, "The configuration request body must be a JSON object.");
+  if (!("config" in input)) throw new ApiRequestError(400, "INVALID_REQUEST", "The request must include a config object.");
+  return { config: input.config, ...(input.dryRun === undefined ? {} : { dryRun: parseConfigDryRun(input.dryRun) }) };
+}
+
+function parseConfigSaveRequest(body: unknown): ConfigSaveRequest {
+  const input = requiredObject(body, "The configuration request body must be a JSON object.");
+  const preview = parseConfigPreviewRequest(input);
+  return {
+    ...preview,
+    revision: requiredString(input.revision, "revision"),
+    hash: requiredString(input.hash, "hash"),
+    confirmHighRisk: input.confirmHighRisk === undefined ? false : parseBoolean(input.confirmHighRisk, "confirmHighRisk"),
+  };
+}
+
+function parseConfigRestoreRequest(body: unknown): ConfigRestoreRequest {
+  const input = requiredObject(body, "The configuration restore body must be a JSON object.");
+  return {
+    backupId: requiredString(input.backupId, "backupId"),
+    revision: requiredString(input.revision, "revision"),
+    hash: requiredString(input.hash, "hash"),
+    confirmHighRisk: input.confirmHighRisk === undefined ? false : parseBoolean(input.confirmHighRisk, "confirmHighRisk"),
+  };
+}
+
+function parseConfigDryRun(value: unknown): ConfigDryRunRequest {
+  const input = requiredObject(value, "\"dryRun\" must be an object.");
+  const agentId = input.agentId === undefined ? undefined : requiredString(input.agentId, "dryRun.agentId");
+  const environmentId = input.environmentId === undefined ? undefined : requiredString(input.environmentId, "dryRun.environmentId");
+  const projectId = input.projectId === undefined ? undefined : requiredString(input.projectId, "dryRun.projectId");
+  return {
+    task: requiredString(input.task, "dryRun.task"),
+    ...(agentId === undefined ? {} : { agentId }),
+    ...(environmentId === undefined ? {} : { environmentId }),
+    ...(projectId === undefined ? {} : { projectId }),
+  };
+}
+
+function requiredObject(value: unknown, message: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiRequestError(400, "INVALID_REQUEST", message);
+  return value as Record<string, unknown>;
+}
+
+function serializeConfigPreview(preview: ConfigPreview): Record<string, unknown> {
+  return {
+    valid: preview.policyIssues.length === 0 && (!preview.dryRun || !preview.dryRun.error),
+    config: preview.candidate,
+    revision: preview.current.revision,
+    hash: preview.current.hash,
+    diff: preview.diff,
+    highRisk: preview.highRisk,
+    policyIssues: preview.policyIssues,
+    ...(preview.dryRun ? { dryRun: preview.dryRun } : {}),
+  };
+}
+
+function serializeConfigSave(result: ConfigSaveResult): Record<string, unknown> {
+  return {
+    config: result.current.config,
+    revision: result.current.revision,
+    hash: result.current.hash,
+    diff: result.diff,
+    highRisk: result.highRisk,
+    backupId: result.backupId,
+    auditId: result.auditId,
+    restartRequired: result.restartRequired,
+  };
+}
+
+function readEnvironmentManifest(config: AgentDockConfig, configPath: string, environmentId: string): ReturnType<typeof readEnvironmentManifestSync> {
+  return readEnvironmentManifestSync(config, configBaseDirectory(configPath), environmentId);
 }
 
 function parseCapabilities(value: unknown): RuntimeCapability[] | undefined {
@@ -537,6 +923,13 @@ function parseNetwork(value: unknown): NetworkPolicy {
 function parseBoolean(value: unknown, name: string): boolean {
   if (typeof value !== "boolean") throw new ApiRequestError(400, "INVALID_REQUEST", `\"${name}\" must be a boolean.`);
   return value;
+}
+
+function parseStringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) {
+    throw new ApiRequestError(400, "INVALID_REQUEST", `"${name}" must be an array of non-empty strings.`);
+  }
+  return [...new Set(value.map((item) => String(item).trim()))];
 }
 
 function requiredString(value: unknown, name: string): string {
@@ -734,6 +1127,20 @@ function writeCancelResult(response: ServerResponse, result: ReturnType<LocalRun
 function toApiError(error: unknown): ApiRequestError {
   if (error instanceof ApiRequestError) return error;
   if (error instanceof RouteResolutionError) return new ApiRequestError(409, error.code, error.message, { candidates: error.candidates });
+  if (error instanceof ConfigValidationError) return new ApiRequestError(422, "CONFIG_VALIDATION_FAILED", error.message, { issues: error.issues });
+  if (error instanceof ConfigEditorError) {
+    const status = error.code === "CONFIG_CONFLICT" || error.code === "CONFIG_CONFIRMATION_REQUIRED" ? 409
+      : error.code === "CONFIG_BACKUP_NOT_FOUND" ? 404
+        : error.code === "CONFIG_POLICY_INVALID" ? 422
+          : 500;
+    return new ApiRequestError(status, error.code, error.message, error.details);
+  }
+  if (error instanceof EnvironmentManagerError) {
+    const status = error.code === "ENVIRONMENT_NOT_FOUND" || error.code === "ENVIRONMENT_BACKUP_NOT_FOUND" ? 404
+      : error.code === "ENVIRONMENT_EXTERNAL_CONFIRMATION_REQUIRED" ? 409
+        : 422;
+    return new ApiRequestError(status, error.code, error.message, error.details);
+  }
   return new ApiRequestError(500, "INTERNAL_ERROR", "The API request could not be completed.");
 }
 

@@ -8,7 +8,7 @@ CLI 的 `run execute` 参数对应 API 的 `POST /api/v1/runs`：
 
 | CLI | API JSON |
 | --- | --- |
-| `--profile <id>` | `profileId` |
+| `--environment <id>` | `environmentId` |
 | `--project <id>` | `projectId` |
 | `--session <id>` | `sessionId` |
 | 任务文本 | `task` |
@@ -21,6 +21,8 @@ CLI 的 `run execute` 参数对应 API 的 `POST /api/v1/runs`：
 API 创建成功返回 `202`，随后从 `GET /api/v1/runs/{runId}/events` 读取历史 JSON 或 SSE。SSE 的 `id` 是 Run 内事件序号，断线后使用 `after=<最后确认的序号>`，客户端必须能处理重复连接而不能假定服务保留内存游标。
 
 ## 从 API 第一切片迁移
+
+配置模型已经破坏性替换为 `engines`、`environments`、`environmentPermissions` 和 `projects[].environmentIds/defaultEnvironmentId`。旧 `runtimes/profiles/policies` 配置不会自动投影或兼容读取；迁移前请人工转换并校验。该变化不会删除 `.agentdock` 中的 SQLite、历史 Run 或 Agent 原生目录。
 
 1. 将旧路径统一改为 `/api/v1`，不要依赖未版本化路径。
 2. 对 `POST /runs` 保存并重用 `Idempotency-Key`，不要用 Run id 自行模拟幂等。

@@ -8,8 +8,8 @@ describe("doctor", () => {
     const config = validateConfig({
       version: 1,
       dataDir: ".agentdock-test-data",
-      runtimes: [{ id: "unknown", adapter: "not-installed" }],
-      profiles: [],
+      engines: [{ id: "unknown", adapter: "not-installed" }],
+      environments: [],
       projects: [],
     });
     const report = await doctor({ config, configPath: process.cwd(), registry: new RuntimeRegistry(), checkStorage: false });

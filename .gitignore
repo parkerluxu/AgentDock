@@ -1,5 +1,7 @@
 node_modules/
 dist/
+docs/wiki/.vitepress/dist/
+docs/wiki/.vitepress/cache/
 coverage/
 .agentdock/
 .env

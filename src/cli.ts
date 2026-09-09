@@ -13,14 +13,15 @@ import { SqliteRunStore } from "./storage/sqlite-run-store.js";
 import type { AdapterPermission } from "./adapter-contract/index.js";
 import type { RunStatus } from "./core/types.js";
 import { createAgentDockApiServer } from "./api/server.js";
+import { EnvironmentDirectoryManager } from "./environment/manager.js";
 
 function usage(): void {
   process.stdout.write([
     "AgentDock development CLI",
     "",
     "  agentdock config validate [path]",
-    "  agentdock runtime list [--config path]",
-    "  agentdock runtime health <runtime-id> [--config path]",
+    "  agentdock engine list [--config path]",
+    "  agentdock engine health <engine-id> [--config path]",
     "  agentdock adapter install <local-package-path> [--config path]",
     "  agentdock adapter list [--config path]",
     "  agentdock adapter enable <adapter-name> [--grant permission] [--config path]",
@@ -28,11 +29,11 @@ function usage(): void {
     "  agentdock adapter uninstall <adapter-name> [--config path]",
     "  agentdock doctor [--config path]",
     "  agentdock api serve [--config path] [--port number] [--api-token token]",
-    "  agentdock profile list [--config path]",
+    "  agentdock environment list [--config path]",
     "  agentdock project list [--config path]",
     "  agentdock project show [--config path] <project-id>",
-    "  agentdock run dry-run [options] <task>",
-    "  agentdock run execute [options] <task>",
+    "  agentdock run dry-run [--agent id] [options] <task>",
+    "  agentdock run execute [--agent id] [options] <task>",
     "  agentdock run list [options]",
     "  agentdock run show [options] <run-id>",
     "  agentdock run events [options] <run-id>",
@@ -49,7 +50,8 @@ function usage(): void {
 
 interface ParsedOptions {
   configPath: string;
-  profileId?: string;
+  agentId?: string;
+  environmentId?: string;
   projectId?: string;
   sessionId?: string;
   status?: RunStatus;
@@ -69,8 +71,11 @@ function parseOptions(args: string[]): ParsedOptions {
     if (arg === "--config" && next) {
       result.configPath = next;
       index += 1;
-    } else if (arg === "--profile" && next) {
-      result.profileId = next;
+    } else if (arg === "--agent" && next) {
+      result.agentId = next;
+      index += 1;
+    } else if (arg === "--environment" && next) {
+      result.environmentId = next;
       index += 1;
     } else if (arg === "--project" && next) {
       result.projectId = next;
@@ -128,7 +133,7 @@ async function main(): Promise<void> {
     }
   }
 
-  if (group === "runtime" && command === "list") {
+  if (group === "engine" && command === "list") {
     const options = parseOptions(rest);
     try {
       const config = await loadValidatedConfig(options.configPath);
@@ -145,20 +150,20 @@ async function main(): Promise<void> {
     }
   }
 
-  if (group === "runtime" && command === "health") {
+  if (group === "engine" && command === "health") {
     const options = parseOptions(rest);
-    const runtimeId = options.positional[0];
-    if (!runtimeId) {
+    const engineId = options.positional[0];
+    if (!engineId) {
       usage();
       process.exitCode = 1;
       return;
     }
     try {
       const config = await loadValidatedConfig(options.configPath);
-      const runtime = runtimeDescriptors(config).find((item) => item.id === runtimeId);
-      if (!runtime) throw new Error(`Runtime "${runtimeId}" was not found.`);
+      const engine = runtimeDescriptors(config).find((item) => item.id === engineId);
+      if (!engine) throw new Error(`Engine "${engineId}" was not found.`);
       const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
-      const adapter = registry.create(runtime);
+      const adapter = registry.create(engine);
       process.stdout.write(`${JSON.stringify(await adapter.healthCheck(), null, 2)}\n`);
       return;
     } catch (error) {
@@ -245,7 +250,8 @@ async function main(): Promise<void> {
       const context = resolveExecutionContext({
         config,
         baseDirectory: configBaseDirectory(options.configPath),
-        ...(options.profileId ? { profileId: options.profileId } : {}),
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        ...(options.environmentId ? { environmentId: options.environmentId } : {}),
         ...(options.projectId ? { projectId: options.projectId } : {}),
       });
       process.stdout.write(`${JSON.stringify(formatDryRun(context, task), null, 2)}\n`);
@@ -267,14 +273,23 @@ async function main(): Promise<void> {
     }
     try {
       const config = await loadValidatedConfig(options.configPath);
-      const context = resolveExecutionContext({
+      let context = resolveExecutionContext({
         config,
         baseDirectory: configBaseDirectory(options.configPath),
-        ...(options.profileId ? { profileId: options.profileId } : {}),
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        ...(options.environmentId ? { environmentId: options.environmentId } : {}),
+        ...(options.projectId ? { projectId: options.projectId } : {}),
+      });
+      await new EnvironmentDirectoryManager(config, configBaseDirectory(options.configPath)).rescan(context.agentEnvironment.id);
+      context = resolveExecutionContext({
+        config,
+        baseDirectory: configBaseDirectory(options.configPath),
+        environmentId: context.agentEnvironment.id,
+        ...(options.agentId ? { agentId: options.agentId } : {}),
         ...(options.projectId ? { projectId: options.projectId } : {}),
       });
       const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
-      const adapter = registry.create(context.runtime);
+      const adapter = registry.create(context.engine);
       const store = new SqliteRunStore(configDataPath(config, options.configPath), config.storage);
       store.recoverStaleRuns();
       const service = new RunService(store);
@@ -308,11 +323,11 @@ async function main(): Promise<void> {
     }
   }
 
-  if (group === "profile" && command === "list") {
+  if (group === "environment" && command === "list") {
     const options = parseOptions(rest);
     try {
       const config = await loadValidatedConfig(options.configPath);
-      process.stdout.write(`${JSON.stringify(config.profiles, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(config.environments, null, 2)}\n`);
       return;
     } catch (error) {
       printError(error);
@@ -403,14 +418,23 @@ async function main(): Promise<void> {
       try {
         store.recoverStaleRuns();
         if (command === "create") {
-          const context = resolveExecutionContext({
+          let context = resolveExecutionContext({
             config,
             baseDirectory: configBaseDirectory(options.configPath),
-            ...(options.profileId ? { profileId: options.profileId } : {}),
+            ...(options.agentId ? { agentId: options.agentId } : {}),
+            ...(options.environmentId ? { environmentId: options.environmentId } : {}),
+            ...(options.projectId ? { projectId: options.projectId } : {}),
+          });
+          await new EnvironmentDirectoryManager(config, configBaseDirectory(options.configPath)).rescan(context.agentEnvironment.id);
+          context = resolveExecutionContext({
+            config,
+            baseDirectory: configBaseDirectory(options.configPath),
+            environmentId: context.agentEnvironment.id,
+            ...(options.agentId ? { agentId: options.agentId } : {}),
             ...(options.projectId ? { projectId: options.projectId } : {}),
           });
           const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
-          const session = await new SessionService(store).create(context, registry.create(context.runtime));
+          const session = await new SessionService(store).create(context, registry.create(context.engine));
           process.stdout.write(`${JSON.stringify(session, null, 2)}\n`);
         } else if (command === "list") {
           process.stdout.write(`${JSON.stringify(store.listSessions(), null, 2)}\n`);

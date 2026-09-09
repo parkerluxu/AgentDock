@@ -1,127 +1,29 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentdock.dev/schema/config.v1.json",
-  "title": "AgentDock configuration",
+  "title": "AgentDock local Agent environment configuration",
   "type": "object",
-  "required": ["version"],
+  "required": ["version", "engines", "environments", "agents", "environmentPermissions", "projects"],
   "properties": {
     "version": { "const": 1 },
     "dataDir": { "type": "string", "minLength": 1 },
-    "storage": {
-      "type": "object",
-      "properties": {
-        "retentionDays": { "type": "integer", "minimum": 1 },
-        "saveOutput": { "type": "boolean", "default": true }
-      },
-      "additionalProperties": false
-    },
-    "logging": {
-      "type": "object",
-      "properties": {
-        "level": { "type": "string", "enum": ["debug", "info", "warn", "error"], "default": "warn" }
-      },
-      "additionalProperties": false
-    },
-    "redaction": {
-      "type": "object",
-      "properties": {
-        "additionalKeys": { "type": "array", "items": { "type": "string", "minLength": 1 }, "default": [] }
-      },
-      "additionalProperties": false
-    },
-    "runtimes": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "adapter"],
-        "properties": {
-          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
-          "adapter": { "type": "string", "minLength": 1 },
-          "binary": { "type": "string", "minLength": 1 },
-          "args": { "type": "array", "items": { "type": "string" } },
-          "version": { "type": "string" },
-          "enabled": { "type": "boolean" },
-          "capabilities": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "enum": ["execute", "stream_events", "cancel", "create_session", "resume_session", "healthcheck"]
-            }
-          }
-        },
-        "additionalProperties": false
-      }
-    },
-    "profiles": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "runtimeId", "policyId"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "runtimeId": { "type": "string", "minLength": 1 },
-          "policyId": { "type": "string", "minLength": 1 },
-          "extends": { "type": "string" },
-          "settings": { "type": "object", "additionalProperties": true }
-        },
-        "additionalProperties": false
-      }
-    },
-    "projects": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "rootDir"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "rootDir": { "type": "string", "minLength": 1 },
-          "profileIds": { "type": "array", "items": { "type": "string" } },
-          "defaultProfileId": { "type": "string" }
-        },
-        "additionalProperties": false
-      }
-    },
-    "policies": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "filesystem", "environment", "network"],
-        "properties": {
-          "id": { "type": "string", "minLength": 1 },
-          "filesystem": {
-            "type": "object",
-            "required": ["roots", "write"],
-            "properties": {
-              "roots": { "type": "array", "items": { "type": "string" } },
-              "write": { "type": "boolean" }
-            },
-            "additionalProperties": false
-          },
-          "environment": {
-            "type": "object",
-            "required": ["allow"],
-            "properties": {
-              "allow": { "type": "array", "items": { "type": "string" } },
-              "secretRefs": {
-                "type": "object",
-                "additionalProperties": {
-                  "type": "object",
-                  "required": ["provider", "key"],
-                  "properties": {
-                    "provider": { "type": "string", "enum": ["env", "keychain", "custom"] },
-                    "key": { "type": "string", "minLength": 1 }
-                  },
-                  "additionalProperties": false
-                }
-              }
-            },
-            "additionalProperties": false
-          },
-          "network": { "type": "string", "enum": ["deny", "allow"] }
-        },
-        "additionalProperties": false
-      }
-    }
+    "storage": { "type": "object", "properties": { "retentionDays": { "type": "integer", "minimum": 1 }, "saveOutput": { "type": "boolean" } }, "additionalProperties": false },
+    "logging": { "type": "object", "properties": { "level": { "enum": ["debug", "info", "warn", "error"] } }, "additionalProperties": false },
+    "redaction": { "type": "object", "properties": { "additionalKeys": { "type": "array", "items": { "type": "string", "minLength": 1 } } }, "additionalProperties": false },
+    "engines": { "type": "array", "items": { "$ref": "#/$defs/engine" } },
+    "environments": { "type": "array", "items": { "$ref": "#/$defs/environment" } },
+    "agents": { "type": "array", "items": { "$ref": "#/$defs/agent" } },
+    "environmentPermissions": { "type": "array", "items": { "$ref": "#/$defs/permission" } },
+    "projects": { "type": "array", "items": { "$ref": "#/$defs/project" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "engine": { "type": "object", "required": ["id", "adapter"], "properties": { "id": { "$ref": "#/$defs/id" }, "adapter": { "type": "string", "minLength": 1 }, "binary": { "type": "string", "minLength": 1 }, "args": { "type": "array", "items": { "type": "string" } }, "version": { "type": "string" }, "enabled": { "type": "boolean" }, "capabilities": { "type": "array", "items": { "enum": ["execute", "stream_events", "cancel", "create_session", "resume_session", "healthcheck"] } } }, "additionalProperties": false },
+    "environment": { "type": "object", "required": ["id"], "properties": { "id": { "$ref": "#/$defs/id" }, "engineId": { "$ref": "#/$defs/id" }, "permissionId": { "$ref": "#/$defs/id" }, "extends": { "$ref": "#/$defs/id" }, "directoryMode": { "enum": ["managed", "external"] }, "homeDir": { "type": "string", "minLength": 1 }, "configDir": { "type": "string", "minLength": 1 }, "stateDir": { "type": "string", "minLength": 1 }, "cacheDir": { "type": "string", "minLength": 1 }, "launchArgs": { "type": "array", "items": { "type": "string" } }, "settings": { "type": "object" } }, "additionalProperties": false },
+    "agent": { "type": "object", "required": ["id", "engineId", "environmentId", "permissionId"], "properties": { "id": { "$ref": "#/$defs/id" }, "engineId": { "$ref": "#/$defs/id" }, "environmentId": { "$ref": "#/$defs/id" }, "permissionId": { "$ref": "#/$defs/id" }, "enabled": { "type": "boolean" }, "processEnv": { "type": "object", "additionalProperties": { "type": "string" } }, "settings": { "type": "object" } }, "additionalProperties": false },
+    "secretReference": { "type": "object", "required": ["provider", "key"], "properties": { "provider": { "enum": ["env", "keychain", "custom"] }, "key": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
+    "permission": { "type": "object", "required": ["id", "filesystem", "environment"], "properties": { "id": { "$ref": "#/$defs/id" }, "filesystem": { "type": "object", "required": ["roots"], "properties": { "roots": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "write": { "type": "boolean" } }, "additionalProperties": false }, "environment": { "type": "object", "properties": { "allow": { "type": "array", "items": { "type": "string" } }, "secretRefs": { "type": "object", "additionalProperties": { "$ref": "#/$defs/secretReference" } } }, "additionalProperties": false }, "network": { "enum": ["deny", "allow"] } }, "additionalProperties": false },
+    "project": { "type": "object", "required": ["id", "rootDir", "agentIds"], "properties": { "id": { "$ref": "#/$defs/id" }, "rootDir": { "type": "string", "minLength": 1 }, "agentIds": { "type": "array", "items": { "$ref": "#/$defs/id" } }, "defaultAgentId": { "$ref": "#/$defs/id" }, "environmentIds": { "type": "array", "items": { "$ref": "#/$defs/id" } }, "defaultEnvironmentId": { "$ref": "#/$defs/id" } }, "additionalProperties": false }
   },
   "additionalProperties": false
 }

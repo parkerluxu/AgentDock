@@ -1,10 +1,10 @@
-import type { Id, Project, Profile, Policy, Run, RuntimeDescriptor, Session } from "../core/types.js";
+import type { AgentEngine, AgentEnvironment, EnvironmentPermission, Id, Project, Run, Session } from "../core/types.js";
 
 export interface Repository {
-  runtimes: EntityRepository<RuntimeDescriptor>;
-  profiles: EntityRepository<Profile>;
+  engines: EntityRepository<AgentEngine>;
+  environments: EntityRepository<AgentEnvironment>;
   projects: EntityRepository<Project>;
-  policies: EntityRepository<Policy>;
+  environmentPermissions: EntityRepository<EnvironmentPermission>;
   sessions: EntityRepository<Session>;
   runs: EntityRepository<Run>;
 }
@@ -38,10 +38,10 @@ class MemoryEntityRepository<T extends { id: Id }> implements EntityRepository<T
 
 export function createMemoryRepository(): Repository {
   return {
-    runtimes: new MemoryEntityRepository<RuntimeDescriptor>(),
-    profiles: new MemoryEntityRepository<Profile>(),
+    engines: new MemoryEntityRepository<AgentEngine>(),
+    environments: new MemoryEntityRepository<AgentEnvironment>(),
     projects: new MemoryEntityRepository<Project>(),
-    policies: new MemoryEntityRepository<Policy>(),
+    environmentPermissions: new MemoryEntityRepository<EnvironmentPermission>(),
     sessions: new MemoryEntityRepository<Session>(),
     runs: new MemoryEntityRepository<Run>(),
   };

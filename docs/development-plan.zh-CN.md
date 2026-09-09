@@ -13,10 +13,10 @@
 | 阶段 0：规格冻结 | `[x]` 完成 | 领域模型、Adapter 契约、能力矩阵、配置 schema、ADR、状态机 | 仅在 Runtime 版本变化时维护兼容矩阵 |
 | 阶段 1：本地 MVP | `[~]` 核心完成 | Claude Code/Codex、ProcessRunner、Policy/Secret、SQLite Run/Session、CLI、doctor、导出、恢复 | 第 5 周文档/发布验收、多平台与稳定性测试 |
 | 阶段 2：API 与插件化 | `[~]` 功能开发完成，Beta 验收进行中 | 回环 HTTP API、Run 提交/查询/取消、SSE、游标重连、Bearer token、SQLite 幂等、请求/Run 限制、确定性可解释路由、Adapter 公共契约、manifest 校验、Echo Adapter、契约测试辅助函数、OpenAPI schema/发现端点、本地 Adapter 安装与生命周期、保留/日志/输出/脱敏策略、API/CLI/Adapter 集成回归、迁移与兼容流程、重启恢复和 ProcessRunner 自动化回归 | 真实磁盘故障、Linux/macOS 信号差异、长任务跨进程重启人工验收、正式发布门禁 |
-| 阶段 3：团队治理 | `[ ]` 未开始 | 无 | 阶段 2 API/SDK 稳定后再做用户试点 |
+| 阶段 3：本地多 Agent 配置环境管理 | `[~]` Web 基础切片完成，Environment 模型尚未接入 | API 同源 Web Control Center、旧配置编辑能力，以及待完成的 Agent Engine/Environment、原生配置目录维护、Project 绑定和 Run snapshot | Environment 领域模型、目录扫描/hash、兼容迁移和端到端验收 |
 | 阶段 4：远程执行 | `[ ]` 未开始 | 无 | 必须由阶段 3 的重复需求触发 |
 
-当前自动化基线：22 个测试文件、79 项测试；`npm run typecheck`、`npm test`、`npm run build` 均通过。集成回归覆盖 Echo、本地示例 Adapter、脚本化 Claude/Codex Adapter、SSE 重连、并发幂等、24 Run 突发、并发取消、Adapter 异常、损坏 SQLite 诊断、数据库重开恢复和 ProcessRunner 取消/退出码；真实 Claude Code/Codex 调用已完成首轮联调，常规自动测试不会消耗模型额度。
+当前自动化基线：22 个测试文件、80 项测试；`npm run typecheck`、`npm test`、`npm run build` 均通过。集成回归覆盖 Echo、本地示例 Adapter、脚本化 Claude/Codex Adapter、SSE 重连、并发幂等、24 Run 突发、并发取消、Adapter 异常、损坏 SQLite 诊断、数据库重开恢复和 ProcessRunner 取消/退出码；真实 Claude Code/Codex 调用已完成首轮联调，常规自动测试不会消耗模型额度。
 
 ## 1. 计划说明
 
@@ -48,7 +48,7 @@
 | 阶段 0 | 2-3 周 | `v0.1-spec` | Adapter 契约、数据模型、兼容矩阵、原型 | 两个 Runtime 可完成同一冒烟任务，核心决策冻结。 |
 | 阶段 1 | 4-6 周 | `v0.1.0-mvp` | CLI、本地控制面、两个内置 Adapter、隔离和 Run/Session | 新用户 10 分钟内完成首次调用，安全与恢复验收通过。 |
 | 阶段 2 | 4-6 周 | `v0.2.0-api` | HTTP API、事件流、路由、Adapter SDK | 自动化调用和第三方 Adapter 契约测试可运行。 |
-| 阶段 3 | 6-8 周 | `v0.3.0-pilot` | 团队配置、审计、CI、只读界面 | 至少 3 个团队试用并提供可重复反馈。 |
+| 阶段 3 | 6-8 周 | `v0.3.0-environments` | 本地多 Agent 配置环境、原生配置目录维护、Project 绑定、可编辑 Web 看板 | 多个 Environment 可创建、复制、校验、备份、恢复并安全用于 Run；历史 snapshot 不受修改影响。 |
 | 阶段 4 | 需求触发后 8-12 周 | `v1.0.0-remote`（候选） | 远程 Worker、组织治理和集中审计 | 远程需求已被阶段 3 用户验证，安全设计评审通过。 |
 
 阶段 4 不是自动开始的开发承诺。若阶段 3 未出现重复的远程执行、组织身份或集中审计需求，应继续加强本地开源核心。
@@ -215,57 +215,73 @@
 
 **阶段 2 当前退出条件**：`[~]` 功能开发、确定性集成回归、数据策略、迁移文档、兼容流程和 SQLite/重启恢复自动化已完成；真实磁盘已满、Linux/macOS 信号差异、长任务跨进程重启和正式版本发布仍需 Beta 门禁，因此暂不标记阶段 2 完成。
 
-## 6. 阶段 3：团队试点与治理（6-8 周）
+## 6. 阶段 3：本地多 Agent 配置环境管理（6-8 周）
 
 ### 目标
 
-验证 AgentDock 在小团队和 CI 中的配置共享、审计、策略一致性和可运维性，不提前建设完整企业平台。
+把 AgentDock 明确为“维护多个 Agent 配置环境的本地平台”。用户可以为不同 Agent、项目和使用场景维护多套可切换的配置目录；Agent 原生配置目录是事实来源，AgentDock 负责目录组织、引用、校验、权限预检、备份和执行快照，不重新复制所有 Agent 的配置字段。
+
+本阶段的配置层级固定为：
+
+- **Agent Engine**：实际可执行的 Agent 引擎与 Adapter，对应当前 Runtime + Adapter，负责二进制、版本、能力和健康检查。
+- **Agent Environment**：阶段 3 的主对象，包含 Engine 引用、原生 `configDir`、`stateDir`、`cacheDir`、启动参数、权限和 Secret Reference。
+- **Project / Workspace**：工作目录，以及允许使用的 Environment 和默认 Environment。
+- **Session / Run**：执行元数据和历史记录，不属于可共享配置层；Run 保存执行时的不可变 snapshot。
+
+Policy 在用户界面中作为 Environment 的“权限”部分呈现，但代码中继续保留独立 Policy 类型，用于校验、路由和 Run snapshot。团队模板、CI、RBAC 和远程执行不作为本阶段主路径。
 
 ### 周级计划
 
-#### 第 1-2 周：项目模板与配置协作
+#### 当前基础切片：Web 控制台与新配置编辑 `[x]`
 
-- 定义可提交仓库的项目配置格式，分离公共 profile 与个人 secret reference。
-- 实现全局、仓库、用户和 CI 层级的覆盖规则及冲突诊断。
-- 增加配置锁定/兼容版本字段，防止团队成员使用未测试 Adapter。
-- 提供模板初始化、配置检查和差异预览命令。
+- `[x]` 在本地 API 服务根路径提供同源只读 Web Control Center，复用现有 Bearer token 认证和查询 API。
+- `[x]` 展示 Runtime、Project、Session、Run 统计，支持 Run 状态/Project 筛选、Run 详情、不可变快照和事件时间线。
+- `[x]` 页面不提供启动或取消 Run 的操作；配置编辑单独受 revision/hash、Policy 校验和高风险确认保护；支持中英文切换，token 和语言选择均不进入 URL，仅保存在浏览器本地存储。
+- `[x]` 可编辑 Web 看板第一版：Runtime、Profile、Project、Policy 表单和高级 JSON 编辑；配置校验、差异/dry-run 预览、revision/hash 冲突、高风险确认、原子保存、备份恢复和追加式审计已实现。
+- `[x]` 页面已转换为 Agent Engine/Agent Environment/Environment Permission 层级，支持 Environment CRUD、复制、导入、目录变更检测、Project 绑定和 Environment 级 Run snapshot。
 
-#### 第 3 周：只读界面与审计检索
+#### 第 1 周：Environment 领域模型与配置替换
 
-- 根据用户试用反馈选择只读 Web 控制台或 TUI，不开发复杂编辑器。
-- 展示 Runtime、Profile、Project、Session、Run、策略事件和错误详情。
-- 支持按时间、项目、状态、Runtime 和 Run ID 检索。
-- 保持界面调用公开 API，不在界面层复制核心业务逻辑。
+- 新增 AgentEngine、AgentEnvironment 和 EnvironmentPermission 的类型、schema、稳定 ID、版本和状态字段。
+- 新配置仅接受 `engines`、`environments`、`environmentPermissions`；旧 `runtimes/profiles/policies` 根字段明确拒绝。`.agentdock` 下 SQLite、历史 Run 和原生目录保留。
+- 定义 Environment 的配置目录、状态目录、缓存目录、启动参数、Secret Reference 和来源（managed/external）。
+- 明确迁移、导出和回滚规则，不修改已有 Run 的历史 snapshot。
 
-#### 第 4 周：CI 非交互模式
+#### 第 2 周：原生配置目录与文件生命周期
 
-- 提供 CI 示例（GitHub Actions/GitLab CI 任选其一作为第一目标）。
-- 增加机器可读输出、确定性退出码、超时、取消和 artifacts 导出。
-- 支持从 CI secret 注入 Secret Provider 引用，禁止将 secret 写入工作区。
-- 对重复提交、构建重试和工作目录清理编写集成测试。
+- 支持创建、导入、复制、重命名、归档和删除 Environment；managed Environment 默认落在 `.agentdock/environments/<id>/`。
+- 区分 `configDir`、`stateDir`、`cacheDir` 和 secret；不把登录缓存、历史 session 或明文 token 当作可共享配置。
+- 对配置目录执行规范化、越界检查、可读性检查和配置完整性检查。
+- 保存目录 manifest、配置 hash 和扫描时间；提供 rescan，检测外部修改并提示重新加载或继续使用。
 
-#### 第 5 周：审计、审批与策略报告
+#### 第 3 周：API 与 Web Environment 管理
 
-- 固化审计事件字段：操作者、来源、项目、Runtime/version、策略快照、结果和关联构件。
-- 增加高风险操作的确认/审批钩子，默认不阻塞低风险只读任务。
-- 生成策略报告和 Run 摘要，支持脱敏后归档。
-- 对审计记录做追加写、防篡改校验和保留策略验证。
+- 将 Web 配置中心作为唯一配置入口，内部切换 Agent Engine、Agent Environment、Project/Workspace 和 Environment Permission；Session、Run 保持独立运行视图。
+- 支持 Environment 列表、详情、创建、复制、编辑、导入和删除；表单覆盖常用字段，高级 JSON 用于 Agent 原生配置。
+- 支持 Project 绑定多个 Environment、设置默认 Environment，并显示引用关系和目录状态。
+- API、CLI、Web 统一使用 Engine/Environment/Environment Permission 词汇，不再提供旧配置兼容读取。
 
-#### 第 6 周：试点运行与可运维性
+#### 第 4-5 周：执行前校验与快照
 
-- 选择 3 个独立团队或项目，明确每个试点的任务类型、成功标准和反馈周期。
-- 观察首次调用成功率、Adapter 失败率、策略拒绝率、恢复成功率和用户留存。
-- 完成升级、回滚、备份恢复、日志轮转和数据迁移演练。
-- 建立 issue 分级和响应规则，优先修复数据泄漏、Run 丢失和不可恢复问题。
+- 执行前校验 Engine、Environment、配置目录、状态目录、Project 工作目录、权限和 Secret Reference。
+- 将 Environment 权限映射到现有 Policy 校验；高风险写入、网络、shell/command 和新增 Secret Reference 仍需显式确认。
+- Run snapshot 保存 Engine/version、Environment ID、配置 hash、目录路径摘要、Policy/权限和 Project 信息。
+- 修改 Environment 或外部目录后，历史 Run 的 snapshot、事件和输出保持不变。
 
-#### 第 7-8 周（按反馈启用）：收敛与发布
+#### 第 6 周：备份、恢复与迁移验收
 
-- 根据试点结果砍掉低使用功能，修复阻断问题和文档缺口。
-- 完成威胁模型复审、依赖升级和发布安全检查。
-- 发布 `v0.3.0-pilot`，给出明确的生产限制和不支持场景。
-- 召开阶段评审，决定是否满足阶段 4 启动条件。
+- Environment 支持备份、复制和恢复；配置文件采用原子写入，目录变更失败可回滚。
+- 对新配置执行 schema、跨对象引用、目录 hash 和快照回归验收；旧配置替换作为显式破坏性变更记录。
+- 在 UI 中展示配置 hash、最后扫描时间、外部变更和恢复历史；保存或恢复后提示重启生效。
+- 补齐 API、CLI、Web 和 SQLite 的回归测试及本地真实数据人工验收。
 
-**阶段 3 退出条件**：至少 3 个团队完成连续试用；本地与 CI 的策略结果一致；审计记录可从 Run 追溯到 Runtime、版本和策略；无已知高危安全问题。
+#### 第 7-8 周（按实际进度启用）：收敛与发布
+
+- 补齐快速开始、配置参考、迁移说明和“配置目录不是 OS/容器沙箱”的安全边界说明。
+- 使用现有 `.agentdock` 数据完成升级、复制、恢复、外部修改检测和历史 Run 不变性验收。
+- 发布 `v0.3.0-environments` 候选；团队模板、CI、RBAC 和远程 Worker 仅记录为后续需求，不作为本阶段发布门槛。
+
+**阶段 3 退出条件**：用户可以注册多个 Agent Engine，创建、复制、修改和恢复多个 Agent Environment；Environment 能引用或管理 Agent 原生配置目录，并检测外部目录变化；Environment 可绑定到不同 Project；执行前能校验 Agent、目录、权限、Secret Reference 和配置完整性；Run snapshot 保存实际使用的 Engine、Environment 配置 hash、Policy 和 Project；修改当前 Environment 不改变历史 Run；无明文 secret 泄漏和已知高危安全问题。
 
 ## 7. 阶段 4：远程执行与企业能力（需求触发后 8-12 周）
 
@@ -290,11 +306,11 @@
 
 | 测试层级 | 阶段 0 | 阶段 1 | 阶段 2 | 阶段 3 | 阶段 4 |
 | --- | --- | --- | --- | --- | --- |
-| 单元测试 | 状态/schema 原型 | 核心领域、Policy、存储 | API、路由、SDK | 模板、审计、CI 边界 | 身份、配额、租约 |
+| 单元测试 | 状态/schema 原型 | 核心领域、Policy、存储 | Engine/Environment、目录、schema/Policy、快照、迁移 | 身份、配额、租约 |
 | Adapter 契约测试 | 接口草案 | 两个内置 Adapter | 第三方示例 Adapter | 兼容矩阵回归 | Worker/远程 Adapter |
-| 集成测试 | 双 Runtime 冒烟 | CLI 到真实 Runtime | API 到 CLI/Adapter | 本地到 CI | 控制面到 Worker |
-| 安全测试 | 威胁模型 | secret/越界/日志脱敏 | API 暴露/权限/背压 | 审计完整性/机器身份 | 组织隔离/网络/灾备 |
-| 故障注入 | 启动失败/超时 | 崩溃/取消/磁盘满 | 断连/重试/重复请求 | 升级/回滚/备份 | Worker 断网/租约过期 |
+| 集成测试 | 双 Runtime 冒烟 | CLI 到真实 Runtime | API 到 CLI/Adapter | Engine/Environment/Project/Run 闭环 | 控制面到 Worker |
+| 安全测试 | 威胁模型 | secret/越界/日志脱敏 | API 暴露/权限/背压 | secret reference、目录越界、风险确认、snapshot 不变性 | 组织隔离/网络/灾备 |
+| 故障注入 | 启动失败/超时 | 崩溃/取消/磁盘满 | 断连/重试/重复请求 | 外部目录修改、并发冲突、原子写入、迁移/恢复 | Worker 断网/租约过期 |
 
 每个发布版本至少满足：核心单元测试通过、两个内置 Adapter 集成测试通过、依赖漏洞扫描无未处理高危项、快速开始文档在干净环境验证通过。
 
@@ -309,7 +325,7 @@
 - `E1-CLI`：五组 CLI、doctor、导出、脚本模式和文档。
 - `E2-API`：HTTP API、SSE/NDJSON、幂等、认证边界和路由。
 - `E2-SDK`：Adapter SDK、manifest、脚手架、契约测试。
-- `E3-TEAM`：项目模板、CI、审计、只读界面、试点运维。
+- `E3-ENVIRONMENTS`：Agent Engine、Agent Environment、原生配置目录、Project 绑定、Web 配置中心、校验、备份恢复和 Run snapshot。
 - `E4-REMOTE`：Worker、组织身份、集中审计、配额和灾备。
 
 每个 issue 应包含：问题背景、依赖 Epic、输入/输出契约、测试场景、风险、验收条件和是否影响兼容性。涉及 schema、API、事件或 Adapter 接口的 PR 必须附迁移说明或明确“无破坏性变更”。
@@ -319,7 +335,7 @@
 1. `M0-spec-freeze`：阶段 0 退出，冻结 P0 数据模型和 Adapter 接口。
 2. `M1-local-loop`：阶段 1 核心闭环，先发布候选版本再做早期试用。
 3. `M2-programmatic`：阶段 2 API/SDK 稳定，开放第三方 Adapter 示例。
-4. `M3-pilot`：阶段 3 团队试点，基于数据决定是否远程化。
+4. `M3-environments`：阶段 3 本地多 Agent 配置环境，完成 Environment 闭环并基于真实使用决定后续治理或远程化。
 5. `M4-remote-go/no-go`：阶段 4 启动评审，不满足条件则明确关闭该里程碑。
 
 ## 10. 每周执行节奏
@@ -337,7 +353,7 @@
 1. 建立仓库骨架、许可证、贡献指南、CI 和文档目录。
 2. 完成 Claude Code/Codex 的真实调用调研和能力矩阵。
 3. 固化 Adapter 最小接口、统一状态/错误/事件类型及其测试样例。
-4. 实现本地配置加载和 `Runtime/Profile/Project/Policy/Run/Session` 数据模型。
+4. 实现本地配置加载和 `AgentEngine/AgentEnvironment/EnvironmentPermission/Project/Run/Session` 数据模型；旧 Runtime/Profile/Policy 配置明确拒绝。
 5. 先实现只读 `dry-run` 和健康检查，再开放真实执行。
 6. 接入一个 Runtime 做完整 Run 闭环，再接入第二个 Runtime 做契约验证。
 7. 在任何并发、路由或 Web UI 之前，完成 secret 脱敏、目录边界、取消和崩溃恢复测试。

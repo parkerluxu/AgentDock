@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import type { Policy, Profile, Project, Run, RunEvent, RunStatus, RuntimeDescriptor, Session } from "../core/types.js";
+import type { Run, RunEvent, RunStatus, Session } from "../core/types.js";
 
 interface SessionRow {
   id: string;
@@ -63,7 +63,7 @@ export type IdempotencyReservation =
 export interface CreateSessionInput {
   id: string;
   projectId?: string;
-  runtimeId: string;
+  engineId: string;
   runtimeSessionId?: string;
   resumable: boolean;
   createdAt?: string;
@@ -71,8 +71,9 @@ export interface CreateSessionInput {
 
 export interface CreateRunInput {
   id: string;
-  runtimeId: string;
-  profileId: string;
+  agentId?: string;
+  engineId: string;
+  environmentId: string;
   projectId?: string;
   sessionId?: string;
   task: string;
@@ -116,11 +117,11 @@ export class SqliteRunStore {
     this.database.prepare(`
       INSERT INTO sessions (id, project_id, runtime_id, runtime_session_id, resumable, status, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
-    `).run(input.id, input.projectId ?? null, input.runtimeId, input.runtimeSessionId ?? null, input.resumable ? 1 : 0, now, now);
+    `).run(input.id, input.projectId ?? null, input.engineId, input.runtimeSessionId ?? null, input.resumable ? 1 : 0, now, now);
     return {
       id: input.id,
       ...(input.projectId ? { projectId: input.projectId } : {}),
-      runtimeId: input.runtimeId,
+      engineId: input.engineId,
       ...(input.runtimeSessionId ? { runtimeSessionId: input.runtimeSessionId } : {}),
       resumable: input.resumable,
       status: "active",
@@ -153,11 +154,12 @@ export class SqliteRunStore {
     this.database.prepare(`
       INSERT INTO runs (id, runtime_id, profile_id, project_id, session_id, task, status, snapshot_json, created_at, owner_pid, started_at, finished_at, exit_code, error_code)
       VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL)
-    `).run(input.id, input.runtimeId, input.profileId, input.projectId ?? null, input.sessionId ?? null, input.task, JSON.stringify(input.snapshot), createdAt, input.ownerPid ?? null);
+    `).run(input.id, input.engineId, input.environmentId, input.projectId ?? null, input.sessionId ?? null, input.task, JSON.stringify(input.snapshot), createdAt, input.ownerPid ?? null);
     return {
       id: input.id,
-      runtimeId: input.runtimeId,
-      profileId: input.profileId,
+      ...(input.agentId ? { agentId: input.agentId } : {}),
+      engineId: input.engineId,
+      environmentId: input.environmentId,
       ...(input.projectId ? { projectId: input.projectId } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       task: input.task,
@@ -384,7 +386,7 @@ function sessionFromRow(row: SessionRow): Session {
   return {
     id: row.id,
     ...(row.project_id ? { projectId: row.project_id } : {}),
-    runtimeId: row.runtime_id,
+    engineId: row.runtime_id,
     ...(row.runtime_session_id ? { runtimeSessionId: row.runtime_session_id } : {}),
     resumable: row.resumable === 1,
     status: row.status,
@@ -405,8 +407,8 @@ function processIsRunning(pid: number): boolean {
 function runFromRow(row: RunRow): Run {
   return {
     id: row.id,
-    runtimeId: row.runtime_id,
-    profileId: row.profile_id,
+    engineId: row.runtime_id,
+    environmentId: row.profile_id,
     ...(row.project_id ? { projectId: row.project_id } : {}),
     ...(row.session_id ? { sessionId: row.session_id } : {}),
     task: row.task,

@@ -1,85 +1,25 @@
 {
   "version": 1,
   "dataDir": "../.agentdock/data",
-  "storage": {
-    "saveOutput": true
-  },
-  "logging": {
-    "level": "warn"
-  },
-  "redaction": {
-    "additionalKeys": []
-  },
-  "runtimes": [
-    {
-      "id": "claude-code",
-      "adapter": "claude-code",
-      "binary": "claude",
-      "args": [],
-      "enabled": true,
-      "capabilities": [
-        "execute",
-        "stream_events",
-        "cancel",
-        "create_session",
-        "resume_session",
-        "healthcheck"
-      ]
-    },
-    {
-      "id": "codex",
-      "adapter": "codex",
-      "binary": "codex",
-      "args": [],
-      "enabled": true,
-      "capabilities": [
-        "execute",
-        "stream_events",
-        "cancel",
-        "resume_session",
-        "healthcheck"
-      ]
-    }
+  "storage": { "saveOutput": true },
+  "logging": { "level": "warn" },
+  "redaction": { "additionalKeys": [] },
+  "engines": [
+    { "id": "claude-code", "adapter": "claude-code", "binary": "claude", "args": [], "enabled": true, "capabilities": ["execute", "stream_events", "cancel", "create_session", "resume_session", "healthcheck"] },
+    { "id": "codex", "adapter": "codex", "binary": "codex", "args": [], "enabled": true, "capabilities": ["execute", "stream_events", "cancel", "resume_session", "healthcheck"] }
   ],
-  "policies": [
-    {
-      "id": "readonly-local",
-      "filesystem": {
-        "roots": ["."],
-        "write": false
-      },
-      "environment": {
-        "allow": ["PATH", "HOME"]
-      },
-      "network": "deny"
-    }
+  "environmentPermissions": [
+    { "id": "readonly-local", "filesystem": { "roots": ["."], "write": false }, "environment": { "allow": ["PATH", "HOME"] }, "network": "deny" }
   ],
-  "profiles": [
-    {
-      "id": "claude-code-readonly",
-      "runtimeId": "claude-code",
-      "policyId": "readonly-local",
-      "settings": {
-        "permissionMode": "plan",
-        "outputFormat": "stream-json"
-      }
-    },
-    {
-      "id": "codex-readonly",
-      "runtimeId": "codex",
-      "policyId": "readonly-local",
-      "settings": {
-        "sandbox": "read-only",
-        "skipGitRepoCheck": true
-      }
-    }
+  "environments": [
+    { "id": "claude-code-home", "homeDir": "~/.claude", "directoryMode": "external", "launchArgs": [], "settings": { "permissionMode": "plan", "outputFormat": "stream-json" } },
+    { "id": "codex-home", "homeDir": "~/.codex", "directoryMode": "external", "launchArgs": [], "settings": { "sandbox": "read-only", "skipGitRepoCheck": true } }
+  ],
+  "agents": [
+    { "id": "claude-reviewer", "engineId": "claude-code", "environmentId": "claude-code-home", "permissionId": "readonly-local", "enabled": true, "processEnv": {}, "settings": {} },
+    { "id": "codex-reviewer", "engineId": "codex", "environmentId": "codex-home", "permissionId": "readonly-local", "enabled": true, "processEnv": {}, "settings": {} }
   ],
   "projects": [
-    {
-      "id": "agentdock",
-      "rootDir": "..",
-      "profileIds": ["claude-code-readonly", "codex-readonly"],
-      "defaultProfileId": "claude-code-readonly"
-    }
+    { "id": "agentdock", "rootDir": "..", "agentIds": ["claude-reviewer", "codex-reviewer"], "defaultAgentId": "claude-reviewer" }
   ]
 }

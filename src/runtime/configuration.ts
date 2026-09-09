@@ -1,9 +1,10 @@
 import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { RuntimeDescriptor } from "../core/types.js";
-import type { AgentDockConfig, ConfigRuntime } from "../config/schema.js";
+import type { AgentDockConfig, ConfigEngine } from "../config/schema.js";
+import { environmentCatalog } from "../config/model.js";
 
-export function toRuntimeDescriptor(runtime: ConfigRuntime): RuntimeDescriptor {
+export function toRuntimeDescriptor(runtime: ConfigEngine): RuntimeDescriptor {
   return {
     id: runtime.id,
     adapter: runtime.adapter,
@@ -16,7 +17,7 @@ export function toRuntimeDescriptor(runtime: ConfigRuntime): RuntimeDescriptor {
 }
 
 export function runtimeDescriptors(config: AgentDockConfig): RuntimeDescriptor[] {
-  return config.runtimes.map(toRuntimeDescriptor);
+  return environmentCatalog(config).engines.map(toRuntimeDescriptor);
 }
 
 export function configBaseDirectory(configPath: string): string {

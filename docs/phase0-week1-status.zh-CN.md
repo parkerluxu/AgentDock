@@ -24,7 +24,7 @@
 
 ```text
 npm run typecheck    PASS
-npm test             PASS（当前：22 文件、79 测试）
+npm test             PASS（当前：22 文件、80 测试）
 npm run build        PASS
 ```
 

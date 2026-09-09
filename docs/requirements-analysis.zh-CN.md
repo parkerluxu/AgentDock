@@ -2,11 +2,26 @@
 
 > 版本：v0.1（需求基线 + 实施状态）  
 > 日期：2026-08-26
-> 定位：面向开发者与工程团队的本地优先、多 Agent Runtime 统一控制平面。
+> 定位：面向开发者与工程团队的本地多 Agent 配置环境管理平台。
+
+> 2026-09-02 决策：Agent Engine、Agent Environment、Environment Permission 是唯一配置模型。旧 `runtimes/profiles/policies` 配置不再兼容读取；`.agentdock` 中已有 SQLite、历史 Run 和 Agent 原生目录必须保留。
 
 ## 当前实施状态
 
-本需求文档描述完整项目目标；它不意味着所有功能已经完成。当前实现以[开发计划的状态表](./development-plan.zh-CN.md#当前实施状态)为准：阶段 0 已完成，阶段 1 核心闭环已完成，阶段 2 的功能开发和确定性集成回归已完成，Beta 发布验收仍在进行。
+本需求文档描述完整项目目标；它不意味着所有功能已经完成。当前实现以[开发计划的状态表](./development-plan.zh-CN.md#当前实施状态)为准：阶段 0 已完成，阶段 1 核心闭环已完成，阶段 2 的功能开发和确定性集成回归已完成，Beta 发布验收仍在进行；阶段 3 的 Web 控制台和旧配置编辑第一版已完成，新的 Agent Environment 模型、原生配置目录维护、Project 绑定和 Environment 级 snapshot 正在进入开发。
+
+## 产品分级
+
+AgentDock 的核心不是一个供多人共享的中央配置中心，而是一个本地维护多个 Agent 配置环境的平台。每个使用者可以在自己的机器上维护自己的 Engine、Environment 和 Project 绑定；后续如出现团队协作或远程执行的重复需求，再在此模型之上扩展。
+
+| 层级 | 核心对象 | 作用 | 当前对应概念 |
+| --- | --- | --- | --- |
+| 1 | Agent Engine | 实际 Agent 引擎与 Adapter，负责二进制、版本、能力和健康检查 | Runtime + Adapter |
+| 2 | Agent Environment | 一套可使用的 Agent 配置环境，包含原生配置目录、状态/缓存目录、启动参数、权限和 Secret Reference | Profile + Policy 的配置组合 |
+| 3 | Project / Workspace | 工作目录，以及允许使用哪些 Environment 和默认 Environment | Project |
+| 4 | Session / Run | 一次会话和执行记录，保存执行时 snapshot | Session + Run |
+
+Agent 原生配置目录可以作为 Environment 的事实来源。AgentDock 管理目录的引用、生命周期、hash/rescan、备份和恢复，但不强行把每种 Agent 的全部配置字段重新建模。`stateDir`、`cacheDir`、登录缓存、历史 session 和明文 secret 必须与可共享配置区分；配置目录也不等价于 OS/容器级安全沙箱。
 
 ## 1. 背景与问题
 
@@ -129,9 +144,11 @@ AgentDock 的切入点不是重新实现 Agent，也不是只代理模型 API，
 | 可移植性 | 首版至少支持 macOS/Linux；Windows 支持应纳入 Beta 验证并明确 shell/路径差异。 |
 | 可靠性 | 进程异常退出后，Run 不能永久卡在 `running`；启动时执行恢复标记。 |
 | 性能 | 控制面自身不应成为瓶颈；本地指令解析与任务提交目标 P95 小于 300 ms（不含 Runtime 启动）。 |
-| 数据完整性 | 运行记录以追加写方式持久化；配置变更不修改历史 Run 快照。 |
+| 数据完整性 | 运行记录以追加写方式持久化；配置变更不修改历史 Run 快照；配置保存采用原子写入并支持失败回滚。 |
 | 易用性 | 新用户应能在 10 分钟内完成一个内置 Runtime 的发现、注册、诊断和首次执行。 |
 | 兼容性 | 明确记录 Adapter 兼容的 Runtime 版本范围，不承诺未测试版本。 |
+| 配置编辑安全 | Web 看板只允许编辑 Secret Reference，不读取或保存明文 secret；写入、网络、shell 等高风险变更需要二次确认。 |
+| 配置生效 | 可编辑看板第一版保存后提示重启生效，不承诺未设计和验证的热加载行为。 |
 
 ## 7. MVP 需求优先级
 
@@ -141,7 +158,7 @@ AgentDock 的切入点不是重新实现 Agent，也不是只代理模型 API，
 | P0 | `[~]` Project 工作目录隔离、环境变量白名单、Secret Reference、策略预检 | 配置边界已实现；OS/容器级文件、网络、命令沙箱尚未实现。 |
 | P1 | `[~]` 本地 HTTP API、事件流、简单路由、导入导出、诊断工具 | API、SSE、导出、doctor、最小 Bearer 认证、OpenAPI 和确定性路由已有；完整远程身份认证尚未实现。 |
 | P1 | `[~]` Adapter SDK、manifest、契约测试、第三方 Adapter 安装 | 公共契约、manifest、Echo Adapter、契约测试和本地安装/启停/卸载已实现；远程安装和 OS 级隔离尚未实现。 |
-| P2 | Web 管理界面、团队配置模板、远程 Runtime、细粒度 RBAC、CI 平台集成 | 验证团队需求后再投入。 |
+| P2 | `[~]` 本地多 Agent 配置环境、Web 管理界面、原生配置目录维护 | Engine/Environment/Permission 模型、目录生命周期、Project 绑定、配置 hash/rescan、Environment CRUD/复制/导入/备份恢复和 Run snapshot 已实现。团队模板、CI、RBAC、远程 Engine 延后。 |
 | P3 | 跨机器调度、云托管控制面、复杂工作流编排、计费/配额 | 属于独立产品线，不进入早期核心。 |
 
 ## 8. 分阶段计划
@@ -186,18 +203,30 @@ AgentDock 的切入点不是重新实现 Agent，也不是只代理模型 API，
 
 验收：脚本可发起任务并消费完整事件流；示例第三方 Adapter 能通过契约测试和 API/CLI 集成回归；异常中断后的 Run 在重启后进入可解释的终态；自动化已覆盖损坏 SQLite 和数据库重开恢复，发布前仍需完成真实磁盘故障、跨平台信号和长任务人工验收。
 
-### 阶段 3：团队试点与治理（6-8 周） `[ ]`
+### 阶段 3：本地多 Agent 配置环境管理（6-8 周） `[~]`
 
-**目标**：在不牺牲本地优先原则的前提下，验证团队共享配置、审计和 CI 的真实需求。
+**目标**：让个人用户在本机维护多套 Agent 配置环境，并按 Project/Workspace 选择、校验和运行；原生 Agent 配置目录是事实来源，AgentDock 提供生命周期管理和执行安全边界。
 
 交付：
 
-- 可签入仓库的项目配置模板与覆盖规则。
-- 只读 Web 控制台或 TUI，查看 Runtime、Session、Run 和策略事件。
-- CI 非交互模式、机器身份的 Secret Provider 接口、构件留档。
-- 基础审批/确认钩子与策略报告。
+- `[x]` 第一版 Web 控制台，查看 Runtime、Project、Session、Run 和事件时间线。
+- `[x]` 旧模型的可编辑配置中心：编辑 Runtime、Profile、Project、Policy，提供 schema/Policy 校验、差异预览、revision/hash 冲突、原子保存、备份恢复和追加式审计。
+- `[x]` Agent Engine、Agent Environment 和 Environment Permission 模型；旧配置明确拒绝。
+- `[ ]` Environment 原生 `configDir`、`stateDir`、`cacheDir` 的创建、导入、复制、备份、恢复、hash/rescan 和外部修改检测。
+- `[ ]` Project/Workspace 到多个 Environment 的绑定、默认 Environment 和引用校验。
+- `[x]` 执行前配置完整性检查，以及包含 Engine、Environment hash、Permission 和 Project 的不可变 Run snapshot。
+- `[ ]` 团队模板、CI、RBAC、远程 Runtime 和集中审计不属于本阶段主交付。
 
-验收：一个小团队可共享项目 profile 模板，在本地与 CI 得到一致的策略结果；审计人员能从 Run 追溯所用 runtime、版本、策略与输出摘要。
+#### 可编辑 Web 看板范围（阶段 3 第一版）
+
+- 编辑范围迁移为 Agent Engine、Agent Environment、Project/Workspace 和 Environment 权限；表单适合常用字段，高级 JSON 编辑用于完整的 Agent 原生配置表达。
+- 保存前执行 schema、跨对象引用、Policy 和 `dry-run` 校验，并展示配置差异、未保存变更和恢复原值入口。
+- Secret 只允许修改 reference，禁止读取、回显或保存明文 secret；开启写入、网络、shell 或新增 secret reference 等高风险变更必须二次确认。
+- 通过配置 revision/hash 检测并发修改，冲突时拒绝覆盖；写入使用临时文件/原子替换，保存前保留备份，失败可回滚。
+- 复用现有 Bearer token 和回环监听边界。第一版保存后提示重启生效，不直接承诺热加载；配置 API 已冻结为 `/config`、`/config/preview`、`/config/backups` 和 `/config/restore`。
+- 配置变更记录追加式审计事件，历史 Run 的不可变 snapshot 不得被编辑操作改写；外部目录变更必须能够通过 hash/rescan 发现。
+
+验收：用户可以维护多个 Engine 和 Environment；Environment 可绑定不同 Project，引用或管理 Agent 原生配置目录，并在外部变更后给出明确提示；执行前可完成 Engine、目录、权限、Secret Reference 和配置完整性校验；备份/恢复和并发冲突可解释；Run 能追溯实际 Engine、Environment 配置 hash、Policy 和 Project，且修改 Environment 不改变历史 snapshot。
 
 ### 阶段 4：远程执行与企业能力（按需求验证后启动） `[ ]`
 

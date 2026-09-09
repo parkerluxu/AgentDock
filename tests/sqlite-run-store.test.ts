@@ -2,10 +2,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Policy, Profile, Project, RuntimeDescriptor } from "../src/core/types.js";
+import type { AgentEngine, AgentEnvironment, EnvironmentPermission, Project } from "../src/core/types.js";
 import { SqliteRunStore } from "../src/storage/sqlite-run-store.js";
 
-const runtime: RuntimeDescriptor = {
+const engine: AgentEngine = {
   id: "codex",
   adapter: "codex",
   binary: "codex",
@@ -13,9 +13,9 @@ const runtime: RuntimeDescriptor = {
   enabled: true,
   capabilities: ["execute"],
 };
-const profile: Profile = { id: "review", runtimeId: "codex", policyId: "readonly", settings: { sandbox: "read-only" } };
-const policy: Policy = { id: "readonly", filesystem: { roots: ["."] , write: false }, environment: { allow: ["PATH"] }, network: "deny" };
-const project: Project = { id: "app", rootDir: "C:/workspace", profileIds: ["review"], defaultProfileId: "review" };
+const environment: AgentEnvironment = { id: "review", engineId: "codex", permissionId: "readonly", directoryMode: "managed", launchArgs: [], settings: { sandbox: "read-only" } };
+const environmentPermission: EnvironmentPermission = { id: "readonly", filesystem: { roots: ["."] , write: false }, environment: { allow: ["PATH"] }, network: "deny" };
+const project: Project = { id: "app", rootDir: "C:/workspace", environmentIds: ["review"], defaultEnvironmentId: "review" };
 
 const databases: SqliteRunStore[] = [];
 const directories: string[] = [];
@@ -36,28 +36,28 @@ function createStore(): SqliteRunStore {
 describe("SqliteRunStore", () => {
   it("persists sessions, runs, snapshots and ordered events", () => {
     const store = createStore();
-    store.createSession({ id: "ses-1", projectId: "app", runtimeId: "codex", resumable: false });
+    store.createSession({ id: "ses-1", projectId: "app", engineId: "codex", resumable: false });
     store.createRun({
       id: "run-1",
-      runtimeId: "codex",
-      profileId: "review",
+      engineId: "codex",
+      environmentId: "review",
       projectId: "app",
       sessionId: "ses-1",
       task: "inspect",
-      snapshot: { runtime, profile, policy, project },
+      snapshot: { engine, environment, environmentPermission, project },
     });
     store.appendEvent({ runId: "run-1", sequence: 0, timestamp: "2026-08-22T00:00:00.000Z", type: "status", payload: { status: "running" } });
     store.appendEvent({ runId: "run-1", sequence: 1, timestamp: "2026-08-22T00:00:01.000Z", type: "status", payload: { status: "succeeded", exitCode: 0 } });
     store.updateRun("run-1", { status: "succeeded", exitCode: 0, finishedAt: "2026-08-22T00:00:01.000Z" });
 
-    expect(store.getSession("ses-1")?.runtimeId).toBe("codex");
-    expect(store.getRun("run-1")).toMatchObject({ id: "run-1", status: "succeeded", snapshot: { policy: { network: "deny" } } });
+    expect(store.getSession("ses-1")?.engineId).toBe("codex");
+    expect(store.getRun("run-1")).toMatchObject({ id: "run-1", status: "succeeded", snapshot: { environmentPermission: { network: "deny" } } });
     expect(store.listEvents("run-1").map((event) => event.sequence)).toEqual([0, 1]);
   });
 
   it("marks non-active runs as failed after a restart", () => {
     const store = createStore();
-    store.createRun({ id: "orphan", runtimeId: "codex", profileId: "review", task: "inspect", snapshot: { runtime, profile, policy } });
+    store.createRun({ id: "orphan", engineId: "codex", environmentId: "review", task: "inspect", snapshot: { engine, environment, environmentPermission } });
     store.updateRun("orphan", { status: "running", startedAt: new Date().toISOString() });
     const recovered = store.recoverStaleRuns();
     expect(recovered[0]).toMatchObject({ id: "orphan", status: "failed", errorCode: "PROCESS_NOT_ACTIVE_AFTER_RESTART" });
@@ -69,9 +69,9 @@ describe("SqliteRunStore", () => {
     directories.push(directory);
     const path = join(directory, "agentdock.db");
     const first = new SqliteRunStore(path);
-    first.createRun({ id: "queued-after-restart", runtimeId: "codex", profileId: "review", task: "queued", snapshot: { runtime, profile, policy }, ownerPid: 999999 });
+    first.createRun({ id: "queued-after-restart", engineId: "codex", environmentId: "review", task: "queued", snapshot: { engine, environment, environmentPermission }, ownerPid: 999999 });
     first.appendEvent({ runId: "queued-after-restart", sequence: 0, timestamp: "2026-08-26T00:00:00.000Z", type: "status", payload: { status: "queued" } });
-    first.createRun({ id: "running-after-restart", runtimeId: "codex", profileId: "review", task: "running", snapshot: { runtime, profile, policy }, ownerPid: 999999 });
+    first.createRun({ id: "running-after-restart", engineId: "codex", environmentId: "review", task: "running", snapshot: { engine, environment, environmentPermission }, ownerPid: 999999 });
     first.appendEvent({ runId: "running-after-restart", sequence: 0, timestamp: "2026-08-26T00:00:00.000Z", type: "status", payload: { status: "queued" } });
     first.updateRun("running-after-restart", { status: "running", startedAt: "2026-08-26T00:00:01.000Z" });
     first.appendEvent({ runId: "running-after-restart", sequence: 1, timestamp: "2026-08-26T00:00:01.000Z", type: "status", payload: { status: "running" } });
@@ -100,7 +100,7 @@ describe("SqliteRunStore", () => {
     const first = new SqliteRunStore(path);
     const second = new SqliteRunStore(path);
     databases.push(first, second);
-    first.createRun({ id: "recovery-race", runtimeId: "codex", profileId: "review", task: "race", snapshot: { runtime, profile, policy }, ownerPid: 999999 });
+    first.createRun({ id: "recovery-race", engineId: "codex", environmentId: "review", task: "race", snapshot: { engine, environment, environmentPermission }, ownerPid: 999999 });
     first.appendEvent({ runId: "recovery-race", sequence: 0, timestamp: "2026-08-26T00:00:00.000Z", type: "status", payload: { status: "running" } });
     first.updateRun("recovery-race", { status: "running", startedAt: "2026-08-26T00:00:00.000Z" });
 
@@ -111,7 +111,7 @@ describe("SqliteRunStore", () => {
 
   it("does not recover a Run owned by a live AgentDock process", () => {
     const store = createStore();
-    store.createRun({ id: "live", runtimeId: "codex", profileId: "review", task: "inspect", snapshot: { runtime, profile, policy }, ownerPid: process.pid });
+    store.createRun({ id: "live", engineId: "codex", environmentId: "review", task: "inspect", snapshot: { engine, environment, environmentPermission }, ownerPid: process.pid });
     store.updateRun("live", { status: "running", startedAt: new Date().toISOString() });
     expect(store.recoverStaleRuns()).toEqual([]);
     expect(store.getRun("live")?.status).toBe("running");
@@ -122,7 +122,7 @@ describe("SqliteRunStore", () => {
     directories.push(directory);
     const path = join(directory, "agentdock.db");
     const first = new SqliteRunStore(path);
-    first.createRun({ id: "run-1", runtimeId: "codex", profileId: "review", task: "inspect", snapshot: { runtime, profile, policy } });
+    first.createRun({ id: "run-1", engineId: "codex", environmentId: "review", task: "inspect", snapshot: { engine, environment, environmentPermission } });
     expect(first.reserveIdempotencyKey("request-1", "hash-1", "run-1")).toEqual({ status: "created" });
     first.close();
 
@@ -139,10 +139,10 @@ describe("SqliteRunStore", () => {
     const store = new SqliteRunStore(path, { saveOutput: false });
     databases.push(store);
     const old = "2025-01-01T00:00:00.000Z";
-    store.createRun({ id: "old", runtimeId: "codex", profileId: "review", task: "inspect", snapshot: { runtime, profile, policy }, createdAt: old });
+    store.createRun({ id: "old", engineId: "codex", environmentId: "review", task: "inspect", snapshot: { engine, environment, environmentPermission }, createdAt: old });
     store.updateRun("old", { status: "succeeded", finishedAt: old });
     store.appendEvent({ runId: "old", sequence: 0, timestamp: old, type: "message", payload: { text: "large output", adapter: "fake" } });
-    store.createRun({ id: "active", runtimeId: "codex", profileId: "review", task: "keep", snapshot: { runtime, profile, policy }, createdAt: old });
+    store.createRun({ id: "active", engineId: "codex", environmentId: "review", task: "keep", snapshot: { engine, environment, environmentPermission }, createdAt: old });
     store.updateRun("active", { status: "running", startedAt: old });
     store.appendEvent({ runId: "active", sequence: 0, timestamp: old, type: "tool_result", payload: { output: "keep this only in memory" } });
 
@@ -159,7 +159,7 @@ describe("SqliteRunStore", () => {
     const path = join(directory, "agentdock.db");
     const old = "2025-01-01T00:00:00.000Z";
     const first = new SqliteRunStore(path);
-    first.createRun({ id: "expired", runtimeId: "codex", profileId: "review", task: "old", snapshot: { runtime, profile, policy }, createdAt: old });
+    first.createRun({ id: "expired", engineId: "codex", environmentId: "review", task: "old", snapshot: { engine, environment, environmentPermission }, createdAt: old });
     first.updateRun("expired", { status: "succeeded", finishedAt: old });
     first.close();
     const reopened = new SqliteRunStore(path, { retentionDays: 30 });

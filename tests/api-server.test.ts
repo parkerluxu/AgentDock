@@ -75,10 +75,10 @@ function createFixture(delayMs: number, createSessionDelayMs = 0) {
   const config = validateConfig({
     version: 1,
     dataDir: "data",
-    runtimes: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
-    policies: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
-    profiles: [{ id: "default", runtimeId: "fake", policyId: "readonly", settings: {} }],
-    projects: [{ id: "workspace", rootDir: process.cwd(), profileIds: ["default"], defaultProfileId: "default" }],
+    engines: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
+    environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
+    environments: [{ id: "default", engineId: "fake", permissionId: "readonly", settings: {} }],
+    projects: [{ id: "workspace", rootDir: process.cwd(), environmentIds: ["default"], defaultEnvironmentId: "default" }],
   });
   const registry = new RuntimeRegistry();
   registry.register("fake", (runtime) => new DelayedAdapter(runtime, delayMs, createSessionDelayMs));
@@ -97,7 +97,27 @@ describe("AgentDock local API server", () => {
     try {
       const address = await fixture.api.listen();
       const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const ui = await fetch(`http://${address.host}:${address.port}/`);
+      expect(ui.status).toBe(200);
+      expect(ui.headers.get("content-type")).toContain("text/html");
+      const uiHtml = await ui.text();
+      expect(uiHtml).toContain("AgentDock Control Center");
+      expect(uiHtml).toContain(".token-screen[hidden]");
+      expect(uiHtml).toContain('data-locale="zh"');
+      expect(uiHtml).toContain('data-locale="en"');
+      expect(uiHtml).toContain("agentdock.locale");
+      expect(uiHtml).toContain("集中查看 Agent Engine 状态与执行历史。");
+      expect(uiHtml).toContain('data-view="configuration"');
+      expect(uiHtml).not.toContain('data-view="engines"');
+      expect(uiHtml).not.toContain('data-view="environments"');
+      expect(uiHtml).toContain("entityNames = ['agents','engines','environments','projects','environmentPermissions']");
+      expect(uiHtml).toContain("建议按顺序配置");
+      expect(uiHtml).toContain("data-project-environment");
+      expect(uiHtml).toContain("fields.environmentIdsHelp");
       expect((await fetch(`${baseUrl}/health`, { headers: authHeaders(fixture.token) })).status).toBe(200);
+      const projects = await fetch(`${baseUrl}/projects`, { headers: authHeaders(fixture.token) });
+      expect(projects.status).toBe(200);
+      expect((await projects.json() as { projects: Array<{ id: string }> }).projects[0]?.id).toBe("workspace");
       const openapi = await fetch(`${baseUrl}/openapi.json`, { headers: authHeaders(fixture.token) });
       const openapiBody = await openapi.json() as { openapi: string; paths: Record<string, unknown> };
       expect(openapi.status).toBe(200);
@@ -111,7 +131,7 @@ describe("AgentDock local API server", () => {
       });
       const createdBody = await created.json() as { run: { id: string }; eventsUrl: string };
       expect(created.status, JSON.stringify(createdBody)).toBe(202);
-      expect(createdBody.run).toMatchObject({ snapshot: { routing: { mode: "project_default", profileId: "default", runtimeId: "fake" } } });
+      expect(createdBody.run).toMatchObject({ snapshot: { routing: { mode: "project_default", environmentId: "default", engineId: "fake" } } });
 
       await waitFor(() => fixture.store.getRun(createdBody.run.id)?.status === "succeeded");
       const retry = await fetch(`${baseUrl}/runs`, {
@@ -130,6 +150,104 @@ describe("AgentDock local API server", () => {
       expect(stream).not.toContain("id: 0");
       expect(stream).toContain("id: 1");
       expect(stream).toContain("id: 3");
+    } finally {
+      await fixture.api.close();
+      fixture.store.close();
+      rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("previews and saves configuration atomically with conflict and risk checks", async () => {
+    const fixture = createFixture(10);
+    try {
+      const address = await fixture.api.listen();
+      const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const snapshotResponse = await fetch(`${baseUrl}/config`, { headers: authHeaders(fixture.token) });
+      const snapshot = await snapshotResponse.json() as { config: Record<string, unknown>; revision: string; hash: string };
+      expect(snapshotResponse.status).toBe(200);
+
+      const runResponse = await fetch(`${baseUrl}/runs`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ task: "before-config-save", projectId: "workspace" }),
+      });
+      const runBody = await runResponse.json() as { run: { id: string; snapshot: unknown } };
+      await waitFor(() => fixture.store.getRun(runBody.run.id)?.status === "succeeded");
+
+      const candidate = structuredClone(snapshot.config) as { engines: Array<Record<string, unknown>> };
+      candidate.engines[0] = { ...candidate.engines[0], version: "1.0.1" };
+      const preview = await fetch(`${baseUrl}/config/preview`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ config: candidate, dryRun: { task: "configuration-preview", projectId: "workspace" } }),
+      });
+      const previewBody = await preview.json() as { valid: boolean; diff: Array<{ path: string }>; dryRun: { executes: boolean } };
+      expect(preview.status).toBe(200);
+      expect(previewBody).toMatchObject({ valid: true, dryRun: { executes: false } });
+      expect(previewBody.diff.some((entry) => entry.path === "engines[0].version")).toBe(true);
+
+      const plaintextSecret = structuredClone(candidate) as { environments: Array<Record<string, unknown>> };
+      plaintextSecret.environments[0] = { ...plaintextSecret.environments[0], settings: { accessToken: "never-store-this" } };
+      const secretResponse = await fetch(`${baseUrl}/config/preview`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ config: plaintextSecret }),
+      });
+      const secretBody = await secretResponse.json() as { error: { code: string; details: { issues: Array<{ path: string }> } } };
+      expect(secretResponse.status).toBe(422);
+      expect(secretBody.error).toMatchObject({ code: "CONFIG_VALIDATION_FAILED", details: { issues: [{ path: "environments[0].settings.accessToken" }] } });
+      expect(JSON.stringify(secretBody)).not.toContain("never-store-this");
+
+      const saved = await fetch(`${baseUrl}/config`, {
+        method: "PUT",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ config: candidate, revision: snapshot.revision, hash: snapshot.hash }),
+      });
+      const savedBody = await saved.json() as { restartRequired: boolean; backupId: string; auditId: string; revision: string };
+      expect(saved.status, JSON.stringify(savedBody)).toBe(200);
+      expect(savedBody).toMatchObject({ restartRequired: true });
+      expect(savedBody.backupId).toContain("config.json.backup.");
+      expect(savedBody.auditId).toEqual(expect.any(String));
+      expect(JSON.parse(readFileSync(join(fixture.directory, "config.json"), "utf8"))).toMatchObject({ engines: [{ version: "1.0.1" }] });
+      expect(fixture.store.getRun(runBody.run.id)?.snapshot).toEqual(runBody.run.snapshot);
+
+      const conflict = await fetch(`${baseUrl}/config`, {
+        method: "PUT",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ config: snapshot.config, revision: snapshot.revision, hash: snapshot.hash }),
+      });
+      const conflictBody = await conflict.json() as { error: { code: string } };
+      expect(conflict.status).toBe(409);
+      expect(conflictBody.error.code).toBe("CONFIG_CONFLICT");
+
+      const risky = structuredClone(candidate) as { environmentPermissions: Array<Record<string, unknown>> };
+      risky.environmentPermissions[0] = { ...risky.environmentPermissions[0], filesystem: { roots: ["."], write: true } };
+      const riskyPreview = await fetch(`${baseUrl}/config/preview`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ config: risky }),
+      });
+      const riskyPreviewBody = await riskyPreview.json() as { valid: boolean; highRisk: { required: boolean } };
+      expect(riskyPreviewBody).toMatchObject({ valid: true, highRisk: { required: true } });
+      const denied = await fetch(`${baseUrl}/config`, {
+        method: "PUT",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ config: risky, revision: savedBody.revision, hash: savedBody.revision }),
+      });
+      expect(denied.status).toBe(409);
+      expect((await denied.json() as { error: { code: string } }).error.code).toBe("CONFIG_CONFIRMATION_REQUIRED");
+
+      const backups = await fetch(`${baseUrl}/config/backups`, { headers: authHeaders(fixture.token) });
+      const backupBody = await backups.json() as { backups: Array<{ id: string }> };
+      expect(backups.status).toBe(200);
+      expect(backupBody.backups.some((backup) => backup.id === savedBody.backupId)).toBe(true);
+      const restored = await fetch(`${baseUrl}/config/restore`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ backupId: savedBody.backupId, revision: savedBody.revision, hash: savedBody.revision, confirmHighRisk: true }),
+      });
+      expect(restored.status).toBe(200);
+      expect(JSON.parse(readFileSync(join(fixture.directory, "config.json"), "utf8"))).toMatchObject({ engines: [{ args: [] }] });
     } finally {
       await fixture.api.close();
       fixture.store.close();
@@ -159,10 +277,10 @@ describe("AgentDock local API server", () => {
         config: validateConfig({
           version: 1,
           dataDir: "data",
-          runtimes: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
-          policies: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
-          profiles: [{ id: "default", runtimeId: "fake", policyId: "readonly", settings: {} }],
-          projects: [{ id: "workspace", rootDir: process.cwd(), profileIds: ["default"], defaultProfileId: "default" }],
+          engines: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
+          environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
+          environments: [{ id: "default", engineId: "fake", permissionId: "readonly", settings: {} }],
+          projects: [{ id: "workspace", rootDir: process.cwd(), environmentIds: ["default"], defaultEnvironmentId: "default" }],
         }),
         configPath: join(fixture.directory, "config.json"),
         store: reopenedStore,
@@ -255,7 +373,7 @@ describe("AgentDock local API server", () => {
   it("creates and reuses the default local token file", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentdock-token-"));
     const databasePath = join(directory, "data", "agentdock.db");
-    const config = validateConfig({ version: 1, dataDir: "data", runtimes: [], profiles: [], projects: [], policies: [] });
+    const config = validateConfig({ version: 1, dataDir: "data", engines: [], environments: [], projects: [], environmentPermissions: [] });
     const tokenPath = join(directory, "data", "api-token");
     const firstStore = new SqliteRunStore(databasePath);
     const firstApi = createAgentDockApiServer({ config, configPath: join(directory, "config.json"), store: firstStore });
@@ -312,10 +430,10 @@ describe("AgentDock local API server", () => {
       config: validateConfig({
         version: 1,
         dataDir: "data",
-        runtimes: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
-        policies: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
-        profiles: [{ id: "default", runtimeId: "fake", policyId: "readonly", settings: {} }],
-        projects: [{ id: "workspace", rootDir: process.cwd(), profileIds: ["default"], defaultProfileId: "default" }],
+        engines: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
+        environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
+        environments: [{ id: "default", engineId: "fake", permissionId: "readonly", settings: {} }],
+        projects: [{ id: "workspace", rootDir: process.cwd(), environmentIds: ["default"], defaultEnvironmentId: "default" }],
       }),
       configPath: join(fixture.directory, "config.json"),
       store: fixture.store,
@@ -355,10 +473,10 @@ describe("AgentDock local API server", () => {
       config: validateConfig({
         version: 1,
         dataDir: "data",
-        runtimes: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
-        policies: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
-        profiles: [{ id: "default", runtimeId: "fake", policyId: "readonly", settings: {} }],
-        projects: [{ id: "workspace", rootDir: process.cwd(), profileIds: ["default"], defaultProfileId: "default" }],
+        engines: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
+        environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
+        environments: [{ id: "default", engineId: "fake", permissionId: "readonly", settings: {} }],
+        projects: [{ id: "workspace", rootDir: process.cwd(), environmentIds: ["default"], defaultEnvironmentId: "default" }],
       }),
       configPath: join(fixture.directory, "config.json"),
       store: fixture.store,
@@ -405,14 +523,14 @@ describe("AgentDock local API server", () => {
     const ambiguousConfig = validateConfig({
       version: 1,
       dataDir: "data",
-      runtimes: [
+      engines: [
         { id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] },
         { id: "other", adapter: "fake", capabilities: ["execute", "cancel"] },
       ],
-      policies: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
-      profiles: [
-        { id: "default", runtimeId: "fake", policyId: "readonly", settings: {} },
-        { id: "other-profile", runtimeId: "other", policyId: "readonly", settings: {} },
+      environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
+      environments: [
+        { id: "default", engineId: "fake", permissionId: "readonly", settings: {} },
+        { id: "other-profile", engineId: "other", permissionId: "readonly", settings: {} },
       ],
       projects: [],
     });

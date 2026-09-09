@@ -5,6 +5,7 @@ import { EnvironmentSecretResolver, type SecretResolver } from "../secrets/resol
 import { SqliteRunStore } from "../storage/sqlite-run-store.js";
 import { configBaseDirectory, configDataPath, runtimeDescriptors } from "./configuration.js";
 import { createConfiguredRuntimeRegistry, type RuntimeRegistry } from "./registry.js";
+import { environmentCatalog } from "../config/model.js";
 
 export interface DoctorDiagnostic {
   scope: "runtime" | "project" | "storage" | "secret";
@@ -66,7 +67,7 @@ export async function doctor(options: DoctorOptions): Promise<DoctorReport> {
     }
   }
 
-  for (const policy of options.config.policies) {
+  for (const policy of environmentCatalog(options.config).permissions) {
     for (const diagnostic of secretResolver.diagnose(policy.environment.secretRefs ?? {})) {
       diagnostics.push({
         scope: "secret",

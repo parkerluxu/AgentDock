@@ -1,0 +1,43 @@
+# Troubleshooting
+
+## Node.js or SQLite errors
+
+```text
+node --version
+```
+
+Use Node.js `22.5` or newer, then rerun `npm ci` and `npm run build`.
+
+## Configuration errors
+
+```text
+npm run config:validate -- <config-path>
+```
+
+Check lowercase IDs, existing Engine/Environment/Permission references, Project defaults, external Environment directories, and inheritance cycles.
+
+## Missing Adapter or unhealthy Runtime
+
+```text
+node dist/cli.js engine list --config <config-path>
+node dist/cli.js engine health <engine-id> --config <config-path>
+node dist/cli.js doctor --config <config-path>
+```
+
+Confirm the Adapter is installed/enabled and the configured binary is available on PATH.
+
+## Environment drift
+
+After confirming the change is trusted, rescan:
+
+```text
+POST /api/v1/environments/<environment-id>/rescan
+```
+
+## API or token problems
+
+Verify the service is running on `127.0.0.1`, the port matches startup JSON, and every request sends `Authorization: Bearer <token>`. Use `--port 0` if a fixed port is occupied.
+
+## Wiki changes not visible
+
+Edit Markdown under `docs/wiki/`, then run `npm run wiki:build` and `npm run wiki:preview`. Never edit the generated `.vitepress/dist/` directory directly.

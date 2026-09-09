@@ -30,8 +30,8 @@ export class RunService {
   public async *execute(options: ExecuteRunOptions): AsyncIterable<{ run: Run; event: RunEvent }> {
     const existingSession = options.sessionId ? this.store.getSession(options.sessionId) : undefined;
     if (options.sessionId && !existingSession) throw new Error(`Session "${options.sessionId}" was not found.`);
-    if (existingSession && existingSession.runtimeId !== options.context.runtime.id) {
-      throw new Error(`Session "${existingSession.id}" belongs to Runtime "${existingSession.runtimeId}", not "${options.context.runtime.id}".`);
+    if (existingSession && existingSession.engineId !== options.context.engine.id) {
+      throw new Error(`Session "${existingSession.id}" belongs to Engine "${existingSession.engineId}", not "${options.context.engine.id}".`);
     }
     if (existingSession?.status !== undefined && existingSession.status !== "active") {
       throw new Error(`Session "${existingSession.id}" is archived and cannot accept a new Run.`);
@@ -48,22 +48,24 @@ export class RunService {
       session = this.store.createSession({
         id: randomUUID(),
         ...(options.context.project ? { projectId: options.context.project.id } : {}),
-        runtimeId: options.context.runtime.id,
+        engineId: options.context.engine.id,
         resumable: created.supported && created.state !== "pending",
         ...(created.runtimeSessionId ? { runtimeSessionId: created.runtimeSessionId } : {}),
       });
     }
     const run = this.store.createRun({
       id: options.runId ?? randomUUID(),
-      runtimeId: options.context.runtime.id,
-      profileId: options.context.profile.id,
+      ...(options.context.agent ? { agentId: options.context.agent.id } : {}),
+      engineId: options.context.engine.id,
+      environmentId: options.context.agentEnvironment.id,
       ...(options.context.project ? { projectId: options.context.project.id } : {}),
       sessionId: session.id,
       task: redactSensitiveValue(options.task, sensitiveValues, options.redaction),
       snapshot: {
-        runtime: options.context.runtime,
-        profile: options.context.profile,
-        policy: options.context.policy,
+        ...(options.context.agent ? { agent: options.context.agent } : {}),
+        engine: options.context.engine,
+        environment: options.context.agentEnvironment,
+        environmentPermission: options.context.environmentPermission,
         ...(options.context.project ? { project: options.context.project } : {}),
         ...(options.routing ? { routing: options.routing } : {}),
         execution: {
@@ -71,6 +73,10 @@ export class RunService {
           allowedEnvironmentKeys: options.context.allowedEnvironmentKeys,
           secretReferenceKeys: Object.keys(options.context.secretReferences).sort(),
         },
+        ...(options.context.environmentManifest ? {
+          environmentManifest: options.context.environmentManifest,
+          environmentConfigHash: options.context.environmentManifest.configHash,
+        } : {}),
       },
       ownerPid: process.pid,
     });
@@ -97,8 +103,8 @@ export class RunService {
         workingDirectory: options.context.workingDirectory,
         environment: { ...options.context.environment, ...resolvedSecrets },
         secretReferences: options.context.secretReferences,
-        runtime: options.context.runtime,
-        settings: options.context.profile.settings,
+        runtime: options.context.engine,
+        settings: options.context.agentEnvironment.settings,
         ...(runtimeSessionId ? { runtimeSessionId } : {}),
         ...(runtimeSessionId ? { sessionMode: session.resumable || options.runtimeSessionId ? "resume" : "create" } : {}),
         signal: controller.signal,

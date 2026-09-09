@@ -8,10 +8,10 @@ import { SessionService } from "../src/runtime/session-service.js";
 import { SqliteRunStore } from "../src/storage/sqlite-run-store.js";
 
 const context: ExecutionContext = {
-  runtime: { id: "claude-code", adapter: "claude-code", args: [], enabled: true, capabilities: ["create_session"] },
-  profile: { id: "review", runtimeId: "claude-code", policyId: "readonly", settings: {} },
-  policy: { id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" },
-  project: { id: "app", rootDir: process.cwd(), profileIds: ["review"] },
+  engine: { id: "claude-code", adapter: "claude-code", args: [], enabled: true, capabilities: ["create_session"] },
+  agentEnvironment: { id: "review", engineId: "claude-code", permissionId: "readonly", directoryMode: "managed", launchArgs: [], settings: {} },
+  environmentPermission: { id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" },
+  project: { id: "app", rootDir: process.cwd(), environmentIds: ["review"] },
   workingDirectory: process.cwd(),
   allowedEnvironmentKeys: [],
   environment: {},
@@ -33,7 +33,7 @@ describe("SessionService", () => {
     try {
       const service = new SessionService(store);
       const session = await service.create(context, new SessionAdapter());
-      expect(session).toMatchObject({ runtimeId: "claude-code", runtimeSessionId: "native-123", resumable: true, status: "active" });
+      expect(session).toMatchObject({ engineId: "claude-code", runtimeSessionId: "native-123", resumable: true, status: "active" });
       expect(service.archive(session.id)).toMatchObject({ id: session.id, status: "archived" });
     } finally {
       store.close();

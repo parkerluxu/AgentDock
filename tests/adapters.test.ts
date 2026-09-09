@@ -58,7 +58,7 @@ describe("built-in adapter command mapping", () => {
     expect(args).toEqual(["exec", "resume", "--json", "--sandbox", "read-only", "session-1", "inspect repository"]);
   });
 
-  it("adds Codex trust bypass only when the Profile explicitly enables it", () => {
+  it("adds Codex trust bypass only when the Environment explicitly enables it", () => {
     const value = { ...request(runtime("codex", "codex")), settings: { sandbox: "read-only", skipGitRepoCheck: true } };
     const args = new InspectableCodexAdapter(runtime("codex", "codex"), new ProcessRunner()).args(value);
     expect(args).toEqual(["exec", "resume", "--json", "--sandbox", "read-only", "--skip-git-repo-check", "session-1", "inspect repository"]);

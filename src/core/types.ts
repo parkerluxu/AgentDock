@@ -17,12 +17,13 @@ export type RuntimeCapability =
   | "healthcheck";
 
 export interface RunRouteSnapshot {
-  mode: "explicit_profile" | "project_default" | "unique_candidate";
-  profileId: Id;
-  runtimeId: Id;
+  mode: "explicit_agent" | "explicit_environment" | "project_default" | "unique_candidate";
+  agentId?: Id;
+  environmentId: Id;
+  engineId?: Id;
   candidates: Array<{
-    profileId: Id;
-    runtimeId: Id;
+    environmentId: Id;
+    engineId: Id;
     health: "healthy" | "unknown" | "unhealthy";
     accepted: boolean;
     reasons: string[];
@@ -42,12 +43,25 @@ export interface RuntimeDescriptor {
   capabilities: RuntimeCapability[];
 }
 
+/** Primary product model. RuntimeDescriptor remains as its v1 wire-compatible shape. */
+export interface AgentEngine extends RuntimeDescriptor {}
+
+export interface Agent {
+  id: Id;
+  engineId: Id;
+  environmentId: Id;
+  permissionId: Id;
+  enabled: boolean;
+  processEnv: Record<string, string>;
+  settings: Record<string, unknown>;
+}
+
 export interface SecretReference {
   provider: "env" | "keychain" | "custom";
   key: string;
 }
 
-export interface Policy {
+export interface EnvironmentPermission {
   id: Id;
   filesystem: {
     roots: string[];
@@ -60,25 +74,48 @@ export interface Policy {
   network: NetworkPolicy;
 }
 
-export interface Profile {
+export type EnvironmentDirectoryMode = "managed" | "external";
+
+export interface AgentEnvironment {
   id: Id;
-  runtimeId: Id;
-  policyId: Id;
+  engineId?: Id;
+  permissionId?: Id;
   extends?: Id;
+  directoryMode: EnvironmentDirectoryMode;
+  homeDir?: string;
+  configDir?: string;
+  stateDir?: string;
+  cacheDir?: string;
+  launchArgs: string[];
   settings: Record<string, unknown>;
+}
+
+export interface EnvironmentManifest {
+  manifestVersion: 1;
+  environmentId: Id;
+  engineId?: Id;
+  directoryMode: EnvironmentDirectoryMode;
+  homeDir?: string;
+  configDir: string;
+  stateDir: string;
+  cacheDir: string;
+  configHash: string;
+  scannedAt: string;
 }
 
 export interface Project {
   id: Id;
   rootDir: string;
-  profileIds: Id[];
-  defaultProfileId?: Id;
+  agentIds?: Id[];
+  defaultAgentId?: Id;
+  environmentIds: Id[];
+  defaultEnvironmentId?: Id;
 }
 
 export interface Session {
   id: Id;
   projectId?: Id;
-  runtimeId: Id;
+  engineId: Id;
   runtimeSessionId?: string;
   resumable: boolean;
   status: "active" | "archived";
@@ -87,9 +124,10 @@ export interface Session {
 }
 
 export interface RunSnapshot {
-  runtime: RuntimeDescriptor;
-  profile: Profile;
-  policy: Policy;
+  agent?: Agent;
+  engine: AgentEngine;
+  environment: AgentEnvironment;
+  environmentPermission: EnvironmentPermission;
   project?: Project;
   routing?: RunRouteSnapshot;
   execution?: {
@@ -97,23 +135,28 @@ export interface RunSnapshot {
     allowedEnvironmentKeys: string[];
     secretReferenceKeys: string[];
   };
+  environmentManifest?: EnvironmentManifest;
+  environmentConfigHash?: string;
 }
 
 export interface ExecutionContext {
-  runtime: RuntimeDescriptor;
-  profile: Profile;
-  policy: Policy;
+  agent?: Agent;
+  engine: AgentEngine;
+  agentEnvironment: AgentEnvironment;
+  environmentPermission: EnvironmentPermission;
   project?: Project;
   workingDirectory: string;
   allowedEnvironmentKeys: string[];
   environment: Record<string, string>;
   secretReferences: Record<string, SecretReference>;
+  environmentManifest?: EnvironmentManifest;
 }
 
 export interface Run {
   id: Id;
-  runtimeId: Id;
-  profileId: Id;
+  agentId?: Id;
+  engineId: Id;
+  environmentId: Id;
   projectId?: Id;
   sessionId?: Id;
   task: string;

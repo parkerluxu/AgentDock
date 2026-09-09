@@ -28,47 +28,61 @@ export function validateConfig(input: unknown): AgentDockConfig {
       return ids;
     };
 
-    const runtimeIds = checkUniqueIds(config.runtimes, "runtimes");
-    const profileIds = checkUniqueIds(config.profiles, "profiles");
-    const policyIds = checkUniqueIds(config.policies, "policies");
+    const engineIds = checkUniqueIds(config.engines, "engines");
+    const environmentIds = checkUniqueIds(config.environments, "environments");
+    const agentIds = checkUniqueIds(config.agents, "agents");
+    const permissionIds = checkUniqueIds(config.environmentPermissions, "environmentPermissions");
     checkUniqueIds(config.projects, "projects");
 
-    for (const [index, profile] of config.profiles.entries()) {
-      if (!runtimeIds.has(profile.runtimeId)) {
-        issues.push({ path: `profiles.${index}.runtimeId`, message: `unknown runtime "${profile.runtimeId}".` });
+    for (const [index, environment] of config.environments.entries()) {
+      if (environment.engineId !== undefined && !engineIds.has(environment.engineId)) {
+        issues.push({ path: `environments.${index}.engineId`, message: `unknown engine "${environment.engineId}".` });
       }
-      if (!policyIds.has(profile.policyId)) {
-        issues.push({ path: `profiles.${index}.policyId`, message: `unknown policy "${profile.policyId}".` });
+      if (environment.permissionId !== undefined && !permissionIds.has(environment.permissionId)) {
+        issues.push({ path: `environments.${index}.permissionId`, message: `unknown environment permission "${environment.permissionId}".` });
       }
-      if (profile.extends === profile.id) {
-        issues.push({ path: `profiles.${index}.extends`, message: "a profile cannot extend itself." });
-      } else if (profile.extends !== undefined && !profileIds.has(profile.extends)) {
-        issues.push({ path: `profiles.${index}.extends`, message: `unknown parent profile "${profile.extends}".` });
+      if (environment.directoryMode === "external" && !environment.homeDir && !environment.configDir) {
+        issues.push({ path: `environments.${index}.homeDir`, message: "is required for an external environment." });
+      }
+      if (environment.extends === environment.id) {
+        issues.push({ path: `environments.${index}.extends`, message: "an environment cannot extend itself." });
+      } else if (environment.extends !== undefined && !environmentIds.has(environment.extends)) {
+        issues.push({ path: `environments.${index}.extends`, message: `unknown parent environment "${environment.extends}".` });
       }
     }
-    for (const [index, profile] of config.profiles.entries()) {
+    for (const [index, agent] of config.agents.entries()) {
+      if (!engineIds.has(agent.engineId)) issues.push({ path: `agents.${index}.engineId`, message: `unknown engine "${agent.engineId}".` });
+      if (!environmentIds.has(agent.environmentId)) issues.push({ path: `agents.${index}.environmentId`, message: `unknown environment "${agent.environmentId}".` });
+      if (!permissionIds.has(agent.permissionId)) issues.push({ path: `agents.${index}.permissionId`, message: `unknown environment permission "${agent.permissionId}".` });
+    }
+    for (const [index, environment] of config.environments.entries()) {
       const chain = new Set<string>();
-      let current = profile;
+      let current = environment;
       while (current.extends !== undefined) {
         if (chain.has(current.id)) {
-          issues.push({ path: `profiles.${index}.extends`, message: `profile inheritance cycle detected at "${current.id}".` });
+          issues.push({ path: `environments.${index}.extends`, message: `environment inheritance cycle detected at "${current.id}".` });
           break;
         }
         chain.add(current.id);
-        const parent = config.profiles.find((item) => item.id === current.extends);
+        const parent = config.environments.find((item) => item.id === current.extends);
         if (!parent) break;
         current = parent;
       }
     }
-
     for (const [index, project] of config.projects.entries()) {
-      for (const [profileIndex, profileId] of project.profileIds.entries()) {
-        if (!profileIds.has(profileId)) {
-          issues.push({ path: `projects.${index}.profileIds.${profileIndex}`, message: `unknown profile "${profileId}".` });
+      for (const [agentIndex, agentId] of project.agentIds.entries()) {
+        if (!agentIds.has(agentId)) issues.push({ path: `projects.${index}.agentIds.${agentIndex}`, message: `unknown agent "${agentId}".` });
+      }
+      if (project.defaultAgentId !== undefined && !project.agentIds.includes(project.defaultAgentId)) {
+        issues.push({ path: `projects.${index}.defaultAgentId`, message: "must be included in agentIds." });
+      }
+      for (const [environmentIndex, environmentId] of project.environmentIds.entries()) {
+        if (!environmentIds.has(environmentId)) {
+          issues.push({ path: `projects.${index}.environmentIds.${environmentIndex}`, message: `unknown environment "${environmentId}".` });
         }
       }
-      if (project.defaultProfileId !== undefined && !project.profileIds.includes(project.defaultProfileId)) {
-        issues.push({ path: `projects.${index}.defaultProfileId`, message: "must be included in profileIds." });
+      if (project.defaultEnvironmentId !== undefined && !project.environmentIds.includes(project.defaultEnvironmentId)) {
+        issues.push({ path: `projects.${index}.defaultEnvironmentId`, message: "must be included in environmentIds." });
       }
     }
 
