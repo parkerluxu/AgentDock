@@ -40,6 +40,23 @@ describe("EnvironmentDirectoryManager", () => {
     expect(environmentManifestPath(config, "C:/workspace", "review")).toBe("C:\\workspace\\.agentdock\\environments\\review\\manifest.json");
   });
 
+  it("keeps native paths on the host path style", () => {
+    const config = validateConfig({
+      version: 1,
+      engines: [{ id: "codex", adapter: "codex", capabilities: ["execute"] }],
+      environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."] }, environment: { allow: [] } }],
+      environments: [{ id: "review", engineId: "codex", permissionId: "readonly" }],
+      projects: [],
+    });
+    const baseDirectory = join(tmpdir(), "agentdock-native-path");
+
+    expect(resolveEnvironmentDirectories(config, baseDirectory, config.environments[0]!)).toEqual({
+      configDir: join(baseDirectory, ".agentdock", "environments", "review", "config"),
+      stateDir: join(baseDirectory, ".agentdock", "environments", "review", "state"),
+      cacheDir: join(baseDirectory, ".agentdock", "environments", "review", "cache"),
+    });
+  });
+
   it("creates managed directories and tracks config hash drift", async () => {
     const f = fixture();
     try {

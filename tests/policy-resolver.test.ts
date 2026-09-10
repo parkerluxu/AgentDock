@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { join, resolve } from "node:path";
 import { formatDryRun, resolveExecutionContext } from "../src/policy/resolver.js";
 import { validateConfig } from "../src/config/load.js";
 
@@ -60,6 +61,8 @@ describe("execution context", () => {
     });
     const context = resolveExecutionContext({ config, baseDirectory: process.cwd() });
     expect(context.agentEnvironment.settings).toEqual({ sandbox: "read-only", model: "b" });
+    expect(context.workingDirectory).toBe(resolve(process.cwd()));
+    expect(context.agentEnvironment.configDir).toBe(join(process.cwd(), ".agentdock", "environments", "child", "config"));
   });
 
   it("applies Agent process environment overrides after permission inheritance", () => {

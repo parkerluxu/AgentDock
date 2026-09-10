@@ -64,7 +64,7 @@ function findProject(config: AgentDockConfig, projectId?: string): AgentDockConf
 function resolveEnvironment(config: AgentDockConfig, id: string, visited = new Set<string>()): ConfigEnvironment { if (visited.has(id)) throw new Error(`Environment inheritance cycle detected at "${id}".`); const environment = config.environments.find((item) => item.id === id); if (!environment) throw new Error(`Environment "${id}" was not found.`); if (!environment.extends) return environment; const parent = resolveEnvironment(config, environment.extends, new Set([...visited, id])); return { ...parent, ...environment, launchArgs: [...parent.launchArgs, ...environment.launchArgs], settings: { ...parent.settings, ...environment.settings } }; }
 function isWithinRoot(candidate: string, root: string): boolean { const pathModule = usesWindowsPath(candidate) || usesWindowsPath(root) ? win32 : { relative, isAbsolute }; const path = pathModule.relative(root, candidate); return path === "" || (path !== ".." && !path.startsWith("..\\") && !path.startsWith("../") && !pathModule.isAbsolute(path)); }
 function resolveConfiguredPath(baseDirectory: string, configuredPath: string): string { return usesWindowsPath(baseDirectory) || usesWindowsPath(configuredPath) ? win32.resolve(baseDirectory, configuredPath) : resolve(baseDirectory, configuredPath); }
-function usesWindowsPath(value: string): boolean { return win32.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\"); }
+function usesWindowsPath(value: string): boolean { return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\"); }
 
 function assertSafeProcessEnvironment(values: Record<string, string>, agentId: string): void {
   for (const key of Object.keys(values)) {

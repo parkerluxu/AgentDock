@@ -368,5 +368,5 @@ function isWithin(candidate: string, root: string): boolean {
 }
 
 function usesWindowsPath(value: string): boolean {
-  return win32.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\");
 }
