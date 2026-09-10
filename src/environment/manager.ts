@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import type { AgentDockConfig, ConfigEnvironment } from "../config/schema.js";
 import { environmentCatalog } from "../config/model.js";
 import type { AgentEnvironment, EnvironmentManifest } from "../core/types.js";
@@ -41,14 +41,14 @@ export class EnvironmentManagerError extends Error {
 }
 
 export function environmentControlRoot(config: AgentDockConfig, baseDirectory: string): string {
-  if (!config.dataDir) return resolve(baseDirectory, ".agentdock");
-  const configured = resolve(baseDirectory, config.dataDir);
-  if (existsSync(configured) && statSync(configured).isFile()) return dirname(configured);
-  return basename(configured).toLowerCase() === "data" ? dirname(configured) : configured;
+  if (!config.dataDir) return resolveConfiguredPath(baseDirectory, ".agentdock");
+  const configured = resolveConfiguredPath(baseDirectory, config.dataDir);
+  if (existsSync(configured) && statSync(configured).isFile()) return dirnameConfigured(configured);
+  return basenameConfigured(configured).toLowerCase() === "data" ? dirnameConfigured(configured) : configured;
 }
 
 export function environmentManifestPath(config: AgentDockConfig, baseDirectory: string, environmentId: string): string {
-  return join(environmentControlRoot(config, baseDirectory), "environments", environmentId, MANIFEST_NAME);
+  return joinConfigured(environmentControlRoot(config, baseDirectory), "environments", environmentId, MANIFEST_NAME);
 }
 
 export function resolveEnvironmentDirectories(
@@ -56,12 +56,12 @@ export function resolveEnvironmentDirectories(
   baseDirectory: string,
   environment: ConfigEnvironment,
 ): ResolvedEnvironmentDirectories {
-  const root = join(environmentControlRoot(config, baseDirectory), "environments", environment.id);
+  const root = joinConfigured(environmentControlRoot(config, baseDirectory), "environments", environment.id);
   if (environment.directoryMode === "managed") {
     const directories = {
-      configDir: environment.homeDir ? resolveConfiguredHome(baseDirectory, environment.homeDir) : environment.configDir ? resolve(baseDirectory, environment.configDir) : join(root, "config"),
-      stateDir: environment.stateDir ? resolve(baseDirectory, environment.stateDir) : join(root, "state"),
-      cacheDir: environment.cacheDir ? resolve(baseDirectory, environment.cacheDir) : join(root, "cache"),
+      configDir: environment.homeDir ? resolveConfiguredHome(baseDirectory, environment.homeDir) : environment.configDir ? resolveConfiguredPath(baseDirectory, environment.configDir) : joinConfigured(root, "config"),
+      stateDir: environment.stateDir ? resolveConfiguredPath(baseDirectory, environment.stateDir) : joinConfigured(root, "state"),
+      cacheDir: environment.cacheDir ? resolveConfiguredPath(baseDirectory, environment.cacheDir) : joinConfigured(root, "cache"),
     };
     for (const [kind, path] of Object.entries(directories)) {
       if (!isWithin(path, root)) {
@@ -76,14 +76,15 @@ export function resolveEnvironmentDirectories(
   const externalHome = environment.homeDir ?? environment.configDir;
   return {
     configDir: resolveConfiguredHome(baseDirectory, externalHome as string),
-    stateDir: environment.stateDir ? resolve(baseDirectory, environment.stateDir) : join(root, "state"),
-    cacheDir: environment.cacheDir ? resolve(baseDirectory, environment.cacheDir) : join(root, "cache"),
+    stateDir: environment.stateDir ? resolveConfiguredPath(baseDirectory, environment.stateDir) : joinConfigured(root, "state"),
+    cacheDir: environment.cacheDir ? resolveConfiguredPath(baseDirectory, environment.cacheDir) : joinConfigured(root, "cache"),
   };
 }
 
 function resolveConfiguredHome(baseDirectory: string, configured: string): string {
-  const expanded = configured === "~" ? (process.env.USERPROFILE ?? process.env.HOME ?? configured) : configured.startsWith("~/") || configured.startsWith("~\\") ? join(process.env.USERPROFILE ?? process.env.HOME ?? baseDirectory, configured.slice(2)) : configured;
-  return resolve(baseDirectory, expanded);
+  const homeDirectory = process.env.USERPROFILE ?? process.env.HOME ?? baseDirectory;
+  const expanded = configured === "~" ? homeDirectory : configured.startsWith("~/") || configured.startsWith("~\\") ? joinConfigured(homeDirectory, configured.slice(2)) : configured;
+  return resolveConfiguredPath(baseDirectory, expanded);
 }
 
 export function readEnvironmentManifestSync(config: AgentDockConfig, baseDirectory: string, environmentId: string): EnvironmentManifest | undefined {
@@ -193,13 +194,13 @@ export class EnvironmentDirectoryManager {
   }
 
   public async importConfig(sourceConfigDir: string, targetEnvironmentId: string): Promise<void> {
-    const source = isAbsolute(sourceConfigDir) ? sourceConfigDir : resolve(this.baseDirectory, sourceConfigDir);
+    const source = isConfiguredAbsolute(sourceConfigDir) ? sourceConfigDir : resolveConfiguredPath(this.baseDirectory, sourceConfigDir);
     await assertDirectory(source, "sourceConfigDir");
     const targetEnvironment = this.requireEnvironment(targetEnvironmentId);
     if (targetEnvironment.directoryMode === "managed") {
       const target = resolveEnvironmentDirectories(this.config, this.baseDirectory, targetEnvironment);
       if (existsSync(target.configDir as string)) throw new EnvironmentManagerError("ENVIRONMENT_DIRECTORY_INVALID", `Target configDir already exists: ${target.configDir}. Choose a new Environment ID or reuse the existing directory.`);
-      await mkdir(dirname(target.configDir), { recursive: true });
+      await mkdir(dirnameConfigured(target.configDir), { recursive: true });
       await cp(source, target.configDir as string, { recursive: true, force: false, errorOnExist: true, dereference: true, filter: (candidate) => !shouldSkipConfigPath(source, candidate) });
     }
     await this.rescan(targetEnvironmentId);
@@ -210,23 +211,23 @@ export class EnvironmentDirectoryManager {
     const directories = resolveEnvironmentDirectories(this.config, this.baseDirectory, environment);
     await assertDirectory(directories.configDir as string, "configDir");
     const id = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
-    const root = join(environmentControlRoot(this.config, this.baseDirectory), "environment-backups", environmentId, id);
+    const root = joinConfigured(environmentControlRoot(this.config, this.baseDirectory), "environment-backups", environmentId, id);
     await mkdir(root, { recursive: true });
-    await cp(directories.configDir as string, join(root, "config"), { recursive: true, force: false, errorOnExist: true, dereference: true, filter: (candidate) => !shouldSkipConfigPath(directories.configDir as string, candidate) });
+    await cp(directories.configDir as string, joinConfigured(root, "config"), { recursive: true, force: false, errorOnExist: true, dereference: true, filter: (candidate) => !shouldSkipConfigPath(directories.configDir as string, candidate) });
     const backup: EnvironmentBackup = { id, environmentId, createdAt: new Date().toISOString(), configHash: await hashConfigDirectory(directories.configDir as string), path: root };
-    await atomicJsonWrite(join(root, "backup.json"), backup);
+    await atomicJsonWrite(joinConfigured(root, "backup.json"), backup);
     return backup;
   }
 
   public async backups(environmentId: string): Promise<EnvironmentBackup[]> {
     this.requireEnvironment(environmentId);
-    const root = join(environmentControlRoot(this.config, this.baseDirectory), "environment-backups", environmentId);
+    const root = joinConfigured(environmentControlRoot(this.config, this.baseDirectory), "environment-backups", environmentId);
     if (!existsSync(root)) return [];
     const entries = await readdir(root, { withFileTypes: true });
     const backups: EnvironmentBackup[] = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      try { backups.push(JSON.parse(await readFile(join(root, entry.name, "backup.json"), "utf8")) as EnvironmentBackup); } catch { /* Ignore incomplete backups. */ }
+      try { backups.push(JSON.parse(await readFile(joinConfigured(root, entry.name, "backup.json"), "utf8")) as EnvironmentBackup); } catch { /* Ignore incomplete backups. */ }
     }
     return backups.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
@@ -340,7 +341,32 @@ async function atomicJsonWrite(path: string, value: unknown): Promise<void> {
   await rename(temporary, path);
 }
 
+function resolveConfiguredPath(baseDirectory: string, configuredPath: string): string {
+  return usesWindowsPath(baseDirectory) || usesWindowsPath(configuredPath) ? win32.resolve(baseDirectory, configuredPath) : resolve(baseDirectory, configuredPath);
+}
+
+function joinConfigured(basePath: string, ...segments: string[]): string {
+  return usesWindowsPath(basePath) ? win32.join(basePath, ...segments) : join(basePath, ...segments);
+}
+
+function dirnameConfigured(path: string): string {
+  return usesWindowsPath(path) ? win32.dirname(path) : dirname(path);
+}
+
+function basenameConfigured(path: string): string {
+  return usesWindowsPath(path) ? win32.basename(path) : basename(path);
+}
+
+function isConfiguredAbsolute(path: string): boolean {
+  return usesWindowsPath(path) ? win32.isAbsolute(path) : isAbsolute(path);
+}
+
 function isWithin(candidate: string, root: string): boolean {
-  const path = relative(root, candidate);
-  return path === "" || (!path.startsWith("..") && !isAbsolute(path));
+  const pathModule = usesWindowsPath(candidate) || usesWindowsPath(root) ? win32 : { relative, isAbsolute };
+  const path = pathModule.relative(root, candidate);
+  return path === "" || (!path.startsWith("..") && !pathModule.isAbsolute(path));
+}
+
+function usesWindowsPath(value: string): boolean {
+  return win32.isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || value.startsWith("\\\\");
 }

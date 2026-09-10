@@ -22,6 +22,24 @@ function fixture() {
 }
 
 describe("EnvironmentDirectoryManager", () => {
+  it("resolves managed directories for a Windows-configured base path", () => {
+    const config = validateConfig({
+      version: 1,
+      engines: [{ id: "codex", adapter: "codex", capabilities: ["execute"] }],
+      environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."] }, environment: { allow: [] } }],
+      environments: [{ id: "review", engineId: "codex", permissionId: "readonly" }],
+      projects: [],
+    });
+
+    const directories = resolveEnvironmentDirectories(config, "C:/workspace", config.environments[0]!);
+    expect(directories).toEqual({
+      configDir: "C:\\workspace\\.agentdock\\environments\\review\\config",
+      stateDir: "C:\\workspace\\.agentdock\\environments\\review\\state",
+      cacheDir: "C:\\workspace\\.agentdock\\environments\\review\\cache",
+    });
+    expect(environmentManifestPath(config, "C:/workspace", "review")).toBe("C:\\workspace\\.agentdock\\environments\\review\\manifest.json");
+  });
+
   it("creates managed directories and tracks config hash drift", async () => {
     const f = fixture();
     try {
