@@ -42,7 +42,7 @@ Agent 原生配置目录是 Environment 的事实来源。AgentDock 管理引用
 2. **原生配置目录**：实现 managed/external 目录、config/state/cache 区分、目录校验、manifest、hash/rescan 和外部修改提示。
 3. **API/Web 迁移**：以“配置中心”为唯一配置入口，内部管理 Engine、Environment、Project/Workspace 和 Permission，支持 Environment CRUD、复制、导入、备份恢复和 Project 绑定。
 4. **执行接入**：执行前校验目录/权限/Secret Reference，Run snapshot 固化 Engine、Environment hash、Policy 和 Project。
-5. **阶段门禁收尾**：补充现有数据迁移、真实目录操作和历史 Run 不变性测试；旧配置保存或恢复后仍需重启 API 服务。
+5. **阶段门禁收尾**：补充现有数据迁移、真实目录操作和历史 Run 不变性测试；配置保存或恢复后的安全热加载已实现，数据目录切换仍需重启 API 服务。
 
 ## 重要边界
 

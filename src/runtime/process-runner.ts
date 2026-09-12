@@ -86,6 +86,10 @@ export class ProcessRunner {
       // The caller has already applied the Policy environment allowlist.
       env: request.env,
       shell: executable.shell,
+      // The final argument to cmd.exe is an already-quoted command line.
+      // Let Windows receive it verbatim; otherwise Node escapes the embedded
+      // quotes and cmd.exe forwards them as literal characters to .cmd shims.
+      windowsVerbatimArguments: executable.prefixArgs !== undefined,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });

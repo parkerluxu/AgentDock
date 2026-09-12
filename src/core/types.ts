@@ -115,7 +115,9 @@ export interface Project {
 export interface Session {
   id: Id;
   projectId?: Id;
+  agentId?: Id;
   engineId: Id;
+  environmentId?: Id;
   runtimeSessionId?: string;
   resumable: boolean;
   status: "active" | "archived";

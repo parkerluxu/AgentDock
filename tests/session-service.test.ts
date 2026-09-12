@@ -9,6 +9,7 @@ import { SqliteRunStore } from "../src/storage/sqlite-run-store.js";
 
 const context: ExecutionContext = {
   engine: { id: "claude-code", adapter: "claude-code", args: [], enabled: true, capabilities: ["create_session"] },
+  agent: { id: "reviewer", engineId: "claude-code", environmentId: "review", permissionId: "readonly", enabled: true, processEnv: {}, settings: {} },
   agentEnvironment: { id: "review", engineId: "claude-code", permissionId: "readonly", directoryMode: "managed", launchArgs: [], settings: {} },
   environmentPermission: { id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" },
   project: { id: "app", rootDir: process.cwd(), environmentIds: ["review"] },
@@ -33,7 +34,7 @@ describe("SessionService", () => {
     try {
       const service = new SessionService(store);
       const session = await service.create(context, new SessionAdapter());
-      expect(session).toMatchObject({ engineId: "claude-code", runtimeSessionId: "native-123", resumable: true, status: "active" });
+      expect(session).toMatchObject({ agentId: "reviewer", engineId: "claude-code", environmentId: "review", runtimeSessionId: "native-123", resumable: true, status: "active" });
       expect(service.archive(session.id)).toMatchObject({ id: session.id, status: "archived" });
     } finally {
       store.close();

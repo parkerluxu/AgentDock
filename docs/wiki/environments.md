@@ -34,13 +34,15 @@ external 示例：
 
 首次使用时 AgentDock 会创建 Environment 目录并写入 manifest。manifest 记录目录路径、配置 hash 和扫描时间。运行前如果发现配置目录在 AgentDock 外部被修改，API 会返回 `ENVIRONMENT_RESCAN_REQUIRED`，防止用未确认的配置执行任务。
 
+Agent 运行过程中产生的 session、缓存和 runtime 状态属于正常运行产物：运行结束后 AgentDock 会自动重新扫描并更新 manifest，下一次请求不需要手动 rescan。当前配置目录已经在运行前发生漂移时，仍需先确认变更可信，再手动 rescan；`managed` 和 `external` 都遵循这条规则。
+
 通过 API 重新扫描：
 
 ```text
 POST /api/v1/environments/<environment-id>/rescan
 ```
 
-CLI 的 `run execute` 和 `session create` 会在启动前自动扫描；API 侧会先检查漂移，只有缺少 manifest 时自动创建。
+CLI 的 `run execute` 和 `session create` 会在启动前自动扫描；API 侧会先检查漂移，只有缺少 manifest 时自动创建，并在 Run 结束后自动同步运行期间产生的目录变化。
 
 ## 导入、复制、备份和恢复
 

@@ -148,7 +148,7 @@ AgentDock 的切入点不是重新实现 Agent，也不是只代理模型 API，
 | 易用性 | 新用户应能在 10 分钟内完成一个内置 Runtime 的发现、注册、诊断和首次执行。 |
 | 兼容性 | 明确记录 Adapter 兼容的 Runtime 版本范围，不承诺未测试版本。 |
 | 配置编辑安全 | Web 看板只允许编辑 Secret Reference，不读取或保存明文 secret；写入、网络、shell 等高风险变更需要二次确认。 |
-| 配置生效 | 可编辑看板第一版保存后提示重启生效，不承诺未设计和验证的热加载行为。 |
+| 配置生效 | 配置保存后对安全变更自动热加载；数据目录切换等无法安全切换的情况明确返回重启提示。 |
 
 ## 7. MVP 需求优先级
 
@@ -223,7 +223,7 @@ AgentDock 的切入点不是重新实现 Agent，也不是只代理模型 API，
 - 保存前执行 schema、跨对象引用、Policy 和 `dry-run` 校验，并展示配置差异、未保存变更和恢复原值入口。
 - Secret 只允许修改 reference，禁止读取、回显或保存明文 secret；开启写入、网络、shell 或新增 secret reference 等高风险变更必须二次确认。
 - 通过配置 revision/hash 检测并发修改，冲突时拒绝覆盖；写入使用临时文件/原子替换，保存前保留备份，失败可回滚。
-- 复用现有 Bearer token 和回环监听边界。第一版保存后提示重启生效，不直接承诺热加载；配置 API 已冻结为 `/config`、`/config/preview`、`/config/backups` 和 `/config/restore`。
+- 复用现有 Bearer token 和回环监听边界。配置 API 支持安全热加载，并继续提供 `/config`、`/config/preview`、`/config/backups` 和 `/config/restore`。
 - 配置变更记录追加式审计事件，历史 Run 的不可变 snapshot 不得被编辑操作改写；外部目录变更必须能够通过 hash/rescan 发现。
 
 验收：用户可以维护多个 Engine 和 Environment；Environment 可绑定不同 Project，引用或管理 Agent 原生配置目录，并在外部变更后给出明确提示；执行前可完成 Engine、目录、权限、Secret Reference 和配置完整性校验；备份/恢复和并发冲突可解释；Run 能追溯实际 Engine、Environment 配置 hash、Policy 和 Project，且修改 Environment 不改变历史 snapshot。

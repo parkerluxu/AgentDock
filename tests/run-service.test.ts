@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 const context: ExecutionContext = {
   engine: { id: "fake", adapter: "fake", args: [], enabled: true, capabilities: ["execute"] },
+  agent: { id: "default-agent", engineId: "fake", environmentId: "default", permissionId: "readonly", enabled: true, processEnv: {}, settings: {} },
   agentEnvironment: { id: "default", engineId: "fake", permissionId: "readonly", directoryMode: "managed", launchArgs: [], settings: {} },
   environmentPermission: { id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" },
   workingDirectory: process.cwd(),
@@ -61,7 +62,30 @@ describe("RunService", () => {
       expect(store.listRuns()[0]?.status).toBe("succeeded");
       expect(store.listEvents(results[0]?.run.id ?? "")).toHaveLength(4);
       expect(adapter.lastRequest).toMatchObject({ runtimeSessionId: "native-session-1", sessionMode: "create" });
-      expect(store.getSession(results[0]?.run.sessionId ?? "")?.resumable).toBe(true);
+      expect(store.getSession(results[0]?.run.sessionId ?? "")).toMatchObject({ agentId: "default-agent", environmentId: "default", resumable: true });
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("does not resume a Session in a different Agent Environment", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agentdock-run-service-session-identity-"));
+    const store = new SqliteRunStore(join(directory, "agentdock.db"));
+    try {
+      const service = new RunService(store);
+      const first = [];
+      for await (const result of service.execute({ context, task: "initial", adapter: new FakeAdapter() })) first.push(result);
+      const sessionId = first[0]?.run.sessionId;
+      expect(sessionId).toBeDefined();
+      const otherContext: ExecutionContext = {
+        ...context,
+        agent: { ...context.agent!, id: "other-agent" },
+        agentEnvironment: { ...context.agentEnvironment, id: "other-environment" },
+      };
+      await expect((async () => {
+        for await (const _result of service.execute({ context: otherContext, sessionId, task: "wrong profile", adapter: new FakeAdapter() })) { /* consume */ }
+      })()).rejects.toThrow(/belongs to Agent/);
     } finally {
       store.close();
       rmSync(directory, { recursive: true, force: true });

@@ -14,6 +14,7 @@ import type { AdapterPermission } from "./adapter-contract/index.js";
 import type { RunStatus } from "./core/types.js";
 import { createAgentDockApiServer } from "./api/server.js";
 import { EnvironmentDirectoryManager } from "./environment/manager.js";
+import { configuredAgents } from "./config/model.js";
 
 function usage(): void {
   process.stdout.write([
@@ -30,6 +31,8 @@ function usage(): void {
     "  agentdock doctor [--config path]",
     "  agentdock api serve [--config path] [--port number] [--api-token token]",
     "  agentdock environment list [--config path]",
+    "  agentdock agent list [--config path]",
+    "  agentdock agent run <agent-id> [options] <task>",
     "  agentdock project list [--config path]",
     "  agentdock project show [--config path] <project-id>",
     "  agentdock run dry-run [--agent id] [options] <task>",
@@ -113,7 +116,28 @@ async function loadValidatedConfig(configPath: string) {
 }
 
 async function main(): Promise<void> {
-  const [group, command, ...rest] = process.argv.slice(2);
+  const [rawGroup, rawCommand, ...rawRest] = process.argv.slice(2);
+  if (rawGroup === "agent" && rawCommand === "list") {
+    const options = parseOptions(rawRest);
+    try {
+      const config = await loadValidatedConfig(options.configPath);
+      process.stdout.write(`${JSON.stringify(configuredAgents(config), null, 2)}\n`);
+      return;
+    } catch (error) {
+      printError(error);
+      process.exitCode = 2;
+      return;
+    }
+  }
+  if (rawGroup === "agent" && rawCommand === "run" && !rawRest[0]) {
+    usage();
+    process.exitCode = 1;
+    return;
+  }
+  const agentRunAlias = rawGroup === "agent" && rawCommand === "run";
+  const group = agentRunAlias ? "run" : rawGroup;
+  const command = agentRunAlias ? "execute" : rawCommand;
+  const rest = agentRunAlias ? ["--agent", rawRest[0] as string, ...rawRest.slice(1)] : rawRest;
   if (group === "config" && command === "validate") {
     const path = rest[0] ?? ".agentdock/config.json";
     try {
@@ -225,7 +249,13 @@ async function main(): Promise<void> {
     try {
       const config = await loadValidatedConfig(options.configPath);
       const registry = await createConfiguredRuntimeRegistry(config, options.configPath);
-      const api = createAgentDockApiServer({ config, configPath: options.configPath, registry, ...(options.apiToken ? { apiToken: options.apiToken } : {}) });
+      const api = createAgentDockApiServer({
+        config,
+        configPath: options.configPath,
+        registry,
+        registryFactory: createConfiguredRuntimeRegistry,
+        ...(options.apiToken ? { apiToken: options.apiToken } : {}),
+      });
       const address = await api.listen(options.port);
       process.stdout.write(`${JSON.stringify({ listening: true, host: address.host, port: address.port, apiBaseUrl: `http://${address.host}:${address.port}/api/v1`, authentication: "bearer", ...(!options.apiToken && !process.env.AGENTDOCK_API_TOKEN ? { tokenFile: join(dirname(configDataPath(config, options.configPath)), "api-token") } : {}) })}\n`);
       await waitForShutdown(api);
@@ -280,7 +310,8 @@ async function main(): Promise<void> {
         ...(options.environmentId ? { environmentId: options.environmentId } : {}),
         ...(options.projectId ? { projectId: options.projectId } : {}),
       });
-      await new EnvironmentDirectoryManager(config, configBaseDirectory(options.configPath)).rescan(context.agentEnvironment.id);
+      const environmentManager = new EnvironmentDirectoryManager(config, configBaseDirectory(options.configPath));
+      await environmentManager.rescan(context.agentEnvironment.id);
       context = resolveExecutionContext({
         config,
         baseDirectory: configBaseDirectory(options.configPath),
@@ -308,6 +339,11 @@ async function main(): Promise<void> {
         })) {
           process.stdout.write(`${JSON.stringify(result.event)}\n`);
           finalStatus = result.run.status;
+        }
+        try {
+          await environmentManager.reconcileAfterRun(context.agentEnvironment.id);
+        } catch (error) {
+          process.stderr.write(`Warning: could not refresh Environment manifest after Run: ${error instanceof Error ? error.message : String(error)}\n`);
         }
         if (finalStatus === "cancelled") process.exitCode = 130;
         else if (finalStatus === "failed" || finalStatus === "timed_out") process.exitCode = 3;

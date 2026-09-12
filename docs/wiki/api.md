@@ -21,7 +21,7 @@ node dist/cli.js api serve --config examples/config.example.json --port 4177
 Authorization: Bearer <api-token>
 ```
 
-根路径 `/`、`/ui` 和 `/ui/` 都打开内置 Control Center。页面支持中英文切换，可以查看 Engine、Environment、Project、Session、Run 和配置差异；配置保存后需要重启 API。
+根路径 `/`、`/ui` 和 `/ui/` 都打开内置 Control Center。页面支持中英文切换，可以查看 Engine、Environment、Project、Session、Run 和配置差异；安全配置保存后会自动热加载，不能安全切换的变更会在响应中标记需要重启。
 
 ## 主要端点
 
@@ -30,8 +30,11 @@ Authorization: Bearer <api-token>
 | `GET` | `/api/v1/health` | API 自身健康检查。 |
 | `GET` | `/api/v1/openapi.json` | OpenAPI 3 schema。 |
 | `GET` | `/api/v1/engines` | Engine 列表。 |
+| `GET` | `/api/v1/agents` | 可调用 Agent 列表。 |
+| `POST` | `/api/v1/agents/:agentId/invoke` | 一条 SSE 连接内调用 Agent（推荐）。 |
 | `GET` | `/api/v1/environments` | Environment 状态、manifest 和漂移信息。 |
 | `GET` | `/api/v1/projects` | Project 列表。 |
+| `PUT` | `/api/v1/projects/:projectId/agents` | 更新 Project 可调用的 Agent 和默认 Agent。 |
 | `GET` | `/api/v1/sessions` | Session 列表。 |
 | `GET` | `/api/v1/runs?status=&projectId=&limit=` | Run 列表。 |
 | `POST` | `/api/v1/runs` | 异步创建 Run。 |
@@ -41,6 +44,18 @@ Authorization: Bearer <api-token>
 | `GET/POST/PUT` | `/api/v1/config...` | 配置读取、预览、保存和恢复。 |
 
 完整端点、错误码和配置编辑协议见[API 参考](https://github.com/parkerluxu/AgentDock/blob/main/docs/api-reference.zh-CN.md)。
+
+## 调用 Agent
+
+面向 UI、脚本和上游产品时，推荐直接调用 Agent，而不是先创建 Run 再手动连接事件流：
+
+```text
+POST /api/v1/agents/codex-reviewer/invoke
+Accept: text/event-stream
+Authorization: Bearer <api-token>
+```
+
+JSON body 至少包含 `task`，也可以带 `projectId`、`sessionId` 和路由要求。响应首先发送不带 sequence 的 `accepted` SSE 事件，其中有 `runId` 与 `eventsUrl`；随后在同一连接持续发送标准 Run 事件直到终态。连接中断时，从 `eventsUrl?stream=sse&after=<last-sequence>` 恢复即可。Agent 已绑定 Environment，因此这个入口不接受 `environmentId`。未声明 SSE `Accept` 的调用返回 `406 SSE_REQUIRED`。
 
 ## 创建 Run
 
@@ -60,7 +75,7 @@ $body = @{
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:4177/api/v1/runs -Headers $headers -Body $body
 ```
 
-成功请求返回 `202 Accepted`、`run.id` 和 `eventsUrl`。`task` 是唯一必填字段；`agentId`、`environmentId`、`projectId`、`sessionId` 用于约束路由。
+成功请求返回 `202 Accepted`、`run.id` 和 `eventsUrl`。`task` 是唯一必填字段；`agentId`、`environmentId`、`projectId`、`sessionId` 用于约束路由。它适合 CI 队列、批处理和需要显式异步语义的调用。
 
 ## 事件流与重连
 

@@ -46,7 +46,7 @@ In another terminal:
 node dist/cli.js api serve --config examples/config.example.json --port 4177
 ```
 
-Open `http://127.0.0.1:4177/`, enter the token, filter the Overview by the `agentdock` Project, and select the new Run. Read the snapshot first, then the event timeline. If Alex changes a Permission, the UI previews and saves it, then the API must be restarted; old Run snapshots remain unchanged.
+Open `http://127.0.0.1:4177/`, enter the token, filter the Overview by the `agentdock` Project, and select the new Run. Read the snapshot first, then the event timeline. If Alex changes a Permission, the UI previews and saves it; safe changes are hot-reloaded, and old Run snapshots remain unchanged.
 
 ## Step 5: automate later
 

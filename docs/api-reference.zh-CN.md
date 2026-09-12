@@ -37,13 +37,16 @@ Authorization: Bearer <api-token>
 
 配置写入仅允许回环 API 的 Bearer token 客户端调用。`GET /config` 返回规范化配置和内容 `revision/hash`；保存或恢复必须携带这两个值，服务会在写入前重新读取配置，发现并发修改时返回 `409 CONFIG_CONFLICT`。配置候选先经过同一份 schema、跨对象引用和 Environment Permission 校验；`POST /config/preview` 还可返回 `dryRun`、差异和高风险变更说明。
 
-`PUT /config` 使用同目录临时文件和原子替换，成功前保留带随机标识的备份，返回 `restartRequired: true`。写入、网络、shell/command 或 Secret Reference 变化会返回高风险说明；请求必须明确设置 `confirmHighRisk: true` 才能保存。明文 secret 不接受，配置中只能使用 `environment.secretRefs`。审计事件追加到配置文件同目录的 `config-audit.jsonl`，只记录版本、差异路径和风险摘要，不记录配置值。
+`PUT /config` 使用同目录临时文件和原子替换，成功前保留带随机标识的备份；安全变更会在保存后立即热加载，并返回 `restartRequired: false`。API 也会监听配置文件的外部修改，读取失败时保留上一次有效运行配置。只有数据目录改变或运行时组件无法热加载时才返回 `restartRequired: true`，同时在 `restartReasons` 中说明原因。写入、网络、shell/command 或 Secret Reference 变化会返回高风险说明；请求必须明确设置 `confirmHighRisk: true` 才能保存。明文 secret 不接受，配置中只能使用 `environment.secretRefs`。审计事件追加到配置文件同目录的 `config-audit.jsonl`，只记录版本、差异路径和风险摘要，不记录配置值。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | API 服务自身的健康检查。 |
 | `GET` | `/api/v1/openapi.json` | 获取当前 API v1 的 OpenAPI 3.0 schema。 |
 | `GET` | `/api/v1/engines` | 配置中的 Agent Engine 描述符。 |
+| `GET` | `/api/v1/agents` | 对外可调用的 Agent 及其 Engine、Environment、Permission 绑定。 |
+| `POST` | `/api/v1/agents/:agentId/invoke` | 通过一条 SSE 连接调用 Agent（推荐的交互入口）。 |
+| `PUT` | `/api/v1/projects/:projectId/agents` | 原子更新 Project 可调用的 Agent 列表和默认 Agent。 |
 | `GET/POST` | `/api/v1/environments` | 列出或创建 Agent Environment。 |
 | `GET/PUT/DELETE` | `/api/v1/environments/:environmentId` | 查看、修改或移除 Environment 配置；删除不会删除目录。 |
 | `POST` | `/api/v1/environments/:environmentId/rescan` | 重新扫描配置目录并更新 manifest/hash。 |
@@ -53,16 +56,47 @@ Authorization: Bearer <api-token>
 | `POST` | `/api/v1/environments/:environmentId/restore` | 恢复 Environment 配置备份。 |
 | `GET` | `/api/v1/sessions` | 本地 Session 列表。 |
 | `GET` | `/api/v1/projects` | 配置中的 Project 列表。 |
+| `PUT` | `/api/v1/projects/:projectId/agents` | 原子更新 Project 可调用的 Agent 列表和默认 Agent。 |
 | `GET` | `/api/v1/config` | 获取配置快照、revision 和 hash。 |
 | `POST` | `/api/v1/config/preview` | 校验候选配置并返回 Policy、dry-run、风险和差异预览。 |
-| `PUT` | `/api/v1/config` | 按 revision/hash 原子保存配置；成功后需要重启 API 服务。 |
+| `PUT` | `/api/v1/config` | 按 revision/hash 原子保存配置；安全变更会热加载，响应会说明是否仍需重启。 |
 | `GET` | `/api/v1/config/backups` | 列出可恢复的配置备份。 |
-| `POST` | `/api/v1/config/restore` | 按备份 ID 恢复配置，同样执行并发检查和原子写入。 |
+| `POST` | `/api/v1/config/restore` | 按备份 ID 恢复配置，同样执行并发检查、原子写入和安全热加载。 |
 | `GET` | `/api/v1/runs?status=&projectId=&limit=` | Run 列表；`status` 必须是有效的统一 Run 状态。 |
 | `POST` | `/api/v1/runs` | 创建并异步执行一个 Run。 |
 | `GET` | `/api/v1/runs/:runId` | 获取 Run 与不可变执行快照。 |
 | `POST` | `/api/v1/runs/:runId/cancel` | 请求取消本 API 进程正在管理的 Run。 |
 | `GET` | `/api/v1/runs/:runId/events` | 获取历史事件 JSON，或通过 SSE 订阅事件。 |
+
+## 调用 Agent（推荐）
+
+普通交互不需要先创建 Run、再用 Run ID 建立第二条 SSE 连接。将 Agent ID 放在 URL 中，并声明 `Accept: text/event-stream`；响应会在同一条连接上持续返回事件：
+
+```http
+POST /api/v1/agents/codex-reviewer/invoke
+Authorization: Bearer <api-token>
+Content-Type: application/json
+Accept: text/event-stream
+Idempotency-Key: review-20260912-001
+
+{
+  "task": "审查当前仓库的测试失败原因",
+  "projectId": "agentdock"
+}
+```
+
+第一个 SSE frame 是没有 sequence 的 `accepted` 事件，包含内部 Run ID、是否新建和事件重放 URL；后续 frame 是同一 Run 的标准事件，`id` 等于严格递增的 sequence：
+
+```text
+event: accepted
+data: {"runId":"...","created":true,"eventsUrl":"/api/v1/runs/.../events"}
+
+id: 0
+event: status
+data: {"runId":"...","sequence":0,"type":"status","payload":{"status":"queued"}}
+```
+
+请求可携带 `projectId`、`sessionId`、能力和 Permission 要求；不接受 `environmentId`，因为 Agent 已经绑定其独立的 Environment。断线后使用 `accepted` 中的 `eventsUrl` 和 `after=<最后确认 sequence>` 恢复。没有 SSE `Accept` 的调用会返回 `406 SSE_REQUIRED`；需要显式异步/批处理语义时使用下面的 `POST /runs`。
 
 ## 创建 Run
 
@@ -139,7 +173,7 @@ Authorization: Bearer <api-token>
 }
 ```
 
-常见状态码包括：`400`（输入、JSON、查询参数错误）、`401`（缺少或无效 token）、`404`（资源不存在）、`409`（幂等冲突、路由冲突、Session 已归档、Runtime 不匹配或 Run 不可取消）、`413`（请求体超过 64 KiB）、`415`（非 JSON 创建请求）、`429`（请求或 Run 并发达到上限）。路由错误的 `error.details.candidates` 会列出每个候选及拒绝原因。默认请求读取超时为 30 秒，默认最多同时管理 4 个 Run 和 32 个 HTTP 请求；可在嵌入 API 时通过服务选项调整。
+常见状态码包括：`400`（输入、JSON、查询参数错误）、`401`（缺少或无效 token）、`404`（资源不存在）、`406`（Agent 调用未声明 SSE）、`409`（幂等冲突、路由冲突、Session 已归档、Runtime 不匹配或 Run 不可取消）、`413`（请求体超过 64 KiB）、`415`（非 JSON 创建请求）、`429`（请求或 Run 并发达到上限）。路由错误的 `error.details.candidates` 会列出每个候选及拒绝原因。默认请求读取超时为 30 秒，默认最多同时管理 4 个 Run 和 32 个 HTTP 请求；可在嵌入 API 时通过服务选项调整。
 
 API 仍然只监听回环地址，token 是同机进程边界的最小认证措施，不等价于 OS/容器沙箱，也未提供 TLS 或远程身份管理。不要通过端口转发、反向代理或防火墙规则把它暴露给其他主机。服务会对运行事件和 API 错误响应做 token 脱敏；SSE 客户端断开会释放连接配额，过慢且持续无法排空的连接会被关闭。
 

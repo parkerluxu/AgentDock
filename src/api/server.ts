@@ -1,10 +1,10 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { ConfigValidationError, loadConfig } from "../config/load.js";
-import { ConfigEditor, ConfigEditorError, type ConfigDryRunRequest, type ConfigPreview, type ConfigSaveResult } from "../config/editor.js";
+import { configHash, ConfigEditor, ConfigEditorError, type ConfigDryRunRequest, type ConfigPreview, type ConfigSaveResult } from "../config/editor.js";
 import type { AgentDockConfig } from "../config/schema.js";
 import type { NetworkPolicy, Run, RunEvent, RunRouteSnapshot, RunStatus, RuntimeCapability } from "../core/types.js";
 import { redactSensitiveValue, type RedactionOptions } from "../core/redaction.js";
@@ -45,6 +45,7 @@ export interface AgentDockApiServerOptions {
   configPath: string;
   store?: SqliteRunStore;
   registry?: RuntimeRegistry;
+  registryFactory?: (config: AgentDockConfig, configPath: string) => Promise<RuntimeRegistry>;
   maxRequestBodyBytes?: number;
   requestTimeoutMs?: number;
   maxConcurrentRequests?: number;
@@ -53,6 +54,8 @@ export interface AgentDockApiServerOptions {
   engineHealth?: Readonly<Record<string, RuntimeHealthStatus>>;
   logger?: Logger;
   redaction?: RedactionOptions;
+  watchConfig?: boolean;
+  configWatchDebounceMs?: number;
 }
 
 export interface AgentDockApiServer {
@@ -82,12 +85,23 @@ interface ActiveRun {
   completion?: Promise<void>;
 }
 
+interface ConfigActivationResult {
+  applied: boolean;
+  restartRequired: boolean;
+  reasons: string[];
+}
+
 interface PendingIdempotentStart {
   fingerprint: string;
   operation: Promise<{ run: Run; created: boolean }>;
 }
 
 type RunListener = (event: RunEvent) => void;
+
+interface SsePreludeEvent {
+  type: string;
+  payload: Record<string, unknown>;
+}
 
 class LocalRunManager {
   private readonly runService: RunService;
@@ -102,16 +116,22 @@ class LocalRunManager {
 
   public constructor(
     private readonly store: SqliteRunStore,
-    private readonly config: AgentDockConfig,
+    private config: AgentDockConfig,
     private readonly configPath: string,
-    private readonly registry: RuntimeRegistry,
+    private registry: RuntimeRegistry,
     private readonly maxConcurrentRuns: number,
     private readonly sensitiveValues: readonly string[],
     private readonly engineHealth: Readonly<Record<string, RuntimeHealthStatus>> | undefined,
     private readonly logger: Logger,
-    private readonly redaction: RedactionOptions,
+    private redaction: RedactionOptions,
   ) {
     this.runService = new RunService(store);
+  }
+
+  public updateRuntime(config: AgentDockConfig, registry: RuntimeRegistry, redaction: RedactionOptions): void {
+    this.config = config;
+    this.registry = registry;
+    this.redaction = redaction;
   }
 
   public start(input: StartRunRequest): Promise<{ run: Run; created: boolean }> {
@@ -162,8 +182,11 @@ class LocalRunManager {
     this.pendingControllers.add(controller);
 
     let startPending = true;
+    const runConfig = this.config;
+    const runRegistry = this.registry;
+    const runRedaction = this.redaction;
     try {
-      const routing = resolveRoute(this.config, {
+      const routing = resolveRoute(runConfig, {
         ...(input.agentId ? { agentId: input.agentId } : {}),
         ...(input.environmentId ? { environmentId: input.environmentId } : {}),
         ...(input.projectId ? { projectId: input.projectId } : {}),
@@ -176,26 +199,26 @@ class LocalRunManager {
       });
       // Freeze a freshly scanned native configuration in the Run snapshot.
       // This creates only AgentDock-managed metadata/directories and never clears state/cache.
-      await this.ensureEnvironmentReady(routing.environmentId);
+      await this.ensureEnvironmentReady(runConfig, routing.environmentId);
       const context = resolveExecutionContext({
-        config: this.config,
+        config: runConfig,
         baseDirectory: configBaseDirectory(this.configPath),
         ...(routing.agentId ? { agentId: routing.agentId } : {}),
         environmentId: routing.environmentId,
         ...(input.projectId ? { projectId: input.projectId } : {}),
       });
-      if (input.sessionId) this.validateSession(input.sessionId, context.engine.id);
+      if (input.sessionId) this.validateSession(input.sessionId, context.agent?.id, context.engine.id, context.agentEnvironment.id);
 
       const runId = reservation?.runId ?? randomUUID();
       const iterator = this.runService.execute({
         context,
         task: input.task,
-        adapter: this.registry.create(context.engine),
+        adapter: runRegistry.create(context.engine),
         ...(input.sessionId ? { sessionId: input.sessionId } : {}),
         runId,
         signal: controller.signal,
         sensitiveValues: this.sensitiveValues,
-        redaction: this.redaction,
+        redaction: runRedaction,
         routing: routing as RunRouteSnapshot,
       })[Symbol.asyncIterator]();
 
@@ -217,18 +240,19 @@ class LocalRunManager {
     }
   }
 
-  private async ensureEnvironmentReady(environmentId: string): Promise<void> {
-    const existing = this.environmentScans.get(environmentId);
+  private async ensureEnvironmentReady(config: AgentDockConfig, environmentId: string): Promise<void> {
+    const key = `${configHash(config)}:${environmentId}`;
+    const existing = this.environmentScans.get(key);
     if (existing) return existing;
     const operation = (async (): Promise<void> => {
-      const directories = new EnvironmentDirectoryManager(this.config, configBaseDirectory(this.configPath));
+      const directories = new EnvironmentDirectoryManager(config, configBaseDirectory(this.configPath));
       const status = await directories.inspect(environmentId);
       if (status.drifted) throw new ApiRequestError(409, "ENVIRONMENT_RESCAN_REQUIRED", `Environment "${environmentId}" changed outside AgentDock. Rescan it before running.`);
       if (!status.manifest) await directories.rescan(environmentId);
       else if (!status.healthy) throw new ApiRequestError(422, "ENVIRONMENT_DIRECTORY_INVALID", status.issues.join("; "));
     })();
-    this.environmentScans.set(environmentId, operation);
-    try { await operation; } finally { this.environmentScans.delete(environmentId); }
+    this.environmentScans.set(key, operation);
+    try { await operation; } finally { this.environmentScans.delete(key); }
   }
 
   private reserveIdempotency(key: string, requestHash: string): IdempotencyReservation & { status: "created" | "existing" | "in_progress" | "conflict" } {
@@ -279,9 +303,18 @@ class LocalRunManager {
       this.logger.error("adapter_execution_failed", { runId });
       this.recoverUnexpectedFailure(runId);
     } finally {
-      this.activeRuns.delete(runId);
       const run = this.store.getRun(runId);
-      if (run) this.logger.info("run_finished", { runId, status: run.status });
+      if (run) {
+        try {
+          const manager = new EnvironmentDirectoryManager(this.config, configBaseDirectory(this.configPath));
+          const refreshed = await manager.reconcileAfterRun(run.environmentId);
+          if (refreshed) this.logger.info("environment_manifest_refreshed_after_run", { runId, environmentId: run.environmentId });
+        } catch (error) {
+          this.logger.warn("environment_manifest_refresh_failed", { runId, environmentId: run.environmentId, reason: error instanceof Error ? error.message : String(error) });
+        }
+        this.logger.info("run_finished", { runId, status: run.status });
+      }
+      this.activeRuns.delete(runId);
     }
   }
 
@@ -310,11 +343,17 @@ class LocalRunManager {
     for (const listener of this.listeners.get(event.runId) ?? []) listener(event);
   }
 
-  private validateSession(sessionId: string, engineId: string): void {
+  private validateSession(sessionId: string, agentId: string | undefined, engineId: string, environmentId: string): void {
     const session = this.store.getSession(sessionId);
     if (!session) throw new ApiRequestError(404, "SESSION_NOT_FOUND", `Session "${sessionId}" was not found.`);
+    if (session.agentId && session.agentId !== agentId) {
+      throw new ApiRequestError(409, "SESSION_AGENT_MISMATCH", `Session "${sessionId}" belongs to Agent "${session.agentId}", not "${agentId ?? "the selected Agent"}".`);
+    }
     if (session.engineId !== engineId) {
       throw new ApiRequestError(409, "SESSION_ENGINE_MISMATCH", `Session "${sessionId}" belongs to Engine "${session.engineId}", not "${engineId}".`);
+    }
+    if (session.environmentId && session.environmentId !== environmentId) {
+      throw new ApiRequestError(409, "SESSION_ENVIRONMENT_MISMATCH", `Session "${sessionId}" belongs to Environment "${session.environmentId}", not "${environmentId}".`);
     }
     if (session.status !== "active") throw new ApiRequestError(409, "SESSION_ARCHIVED", `Session "${sessionId}" is archived and cannot accept a new Run.`);
   }
@@ -331,33 +370,115 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
   validatePositiveInteger(maxConcurrentRequests, "maxConcurrentRequests");
   validatePositiveInteger(maxConcurrentRuns, "maxConcurrentRuns");
   const apiToken = resolveApiToken(options, configDataPath(options.config, options.configPath));
-  const redaction = options.redaction ?? options.config.redaction;
-  const logger = options.logger ?? new AgentDockLogger({ level: options.config.logging.level, redaction });
+  let activeConfig = options.config;
+  let activeRegistry = options.registry ?? createBuiltinRuntimeRegistry();
+  let activeRedaction = options.redaction ?? options.config.redaction;
+  let activeRevision = configHash(activeConfig);
+  const registryFactory = options.registryFactory ?? (!options.registry ? async (config: AgentDockConfig, configPath: string): Promise<RuntimeRegistry> => createConfiguredRuntimeRegistry(config, configPath) : undefined);
+  const logger = options.logger ?? new AgentDockLogger({ level: options.config.logging.level, redaction: activeRedaction });
   const manager = new LocalRunManager(
     store,
-    options.config,
+    activeConfig,
     options.configPath,
-    options.registry ?? createBuiltinRuntimeRegistry(),
+    activeRegistry,
     maxConcurrentRuns,
     apiToken ? [apiToken] : [],
     options.engineHealth,
     logger,
-    redaction,
+    activeRedaction,
   );
   const configEditor = new ConfigEditor(options.configPath, options.config);
   const streams = new Set<ServerResponse>();
   const maxRequestBodyBytes = options.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES;
   validatePositiveInteger(maxRequestBodyBytes, "maxRequestBodyBytes");
+  const configWatchDebounceMs = options.configWatchDebounceMs ?? 100;
+  validatePositiveInteger(configWatchDebounceMs, "configWatchDebounceMs");
+  const watchConfig = options.watchConfig ?? true;
+  const watchedConfigPath = resolve(options.configPath);
+  let configWatcher: FSWatcher | undefined;
+  let configReloadTimer: NodeJS.Timeout | undefined;
+  let configApplyChain: Promise<void> = Promise.resolve();
+  let closing = false;
   let server: Server | undefined;
   let closeOperation: Promise<void> | undefined;
   let inFlightRequests = 0;
+
+  const activateConfigInternal = async (candidate: AgentDockConfig, source: "api" | "file"): Promise<ConfigActivationResult> => {
+    if (closing) return { applied: false, restartRequired: false, reasons: [] };
+    if (configHash(candidate) === activeRevision) return { applied: true, restartRequired: false, reasons: [] };
+    const restartReasons = configRestartReasons(activeConfig, candidate, options.configPath);
+    if (restartReasons.length > 0) {
+      logger.warn("config_reload_requires_restart", { source, reasons: restartReasons });
+      return { applied: false, restartRequired: true, reasons: restartReasons };
+    }
+    let nextRegistry = activeRegistry;
+    try {
+      if (registryFactory) nextRegistry = await registryFactory(candidate, options.configPath);
+      store.updateStorageOptions(candidate.storage);
+    } catch (error) {
+      const reason = `The configuration was saved but could not be hot-reloaded: ${error instanceof Error ? error.message : String(error)}`;
+      logger.warn("config_reload_failed", { source, reason });
+      return { applied: false, restartRequired: true, reasons: [reason] };
+    }
+    activeConfig = candidate;
+    activeRegistry = nextRegistry;
+    activeRedaction = options.redaction ?? candidate.redaction;
+    activeRevision = configHash(candidate);
+    manager.updateRuntime(activeConfig, activeRegistry, activeRedaction);
+    if (logger instanceof AgentDockLogger) logger.update({ level: candidate.logging.level, redaction: activeRedaction });
+    logger.info("config_reloaded", { source, revision: activeRevision });
+    return { applied: true, restartRequired: false, reasons: [] };
+  };
+
+  const activateConfig = (candidate: AgentDockConfig, source: "api" | "file"): Promise<ConfigActivationResult> => {
+    const operation = configApplyChain.then(() => activateConfigInternal(candidate, source));
+    configApplyChain = operation.then(() => undefined, () => undefined);
+    return operation;
+  };
+
+  const reloadConfigFromDisk = async (): Promise<void> => {
+    if (closing) return;
+    let candidate: AgentDockConfig;
+    try {
+      candidate = await loadConfig(watchedConfigPath);
+    } catch (error) {
+      logger.warn("config_reload_failed", { source: "file", reason: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    if (closing) return;
+    await activateConfig(candidate, "file");
+  };
+
+  const scheduleConfigReload = (): void => {
+    if (closing) return;
+    if (configReloadTimer) clearTimeout(configReloadTimer);
+    configReloadTimer = setTimeout(() => {
+      configReloadTimer = undefined;
+      void reloadConfigFromDisk();
+    }, configWatchDebounceMs);
+  };
+
+  const startConfigWatcher = (): void => {
+    if (!watchConfig) return;
+    try {
+      configWatcher = watch(dirname(watchedConfigPath), { persistent: false }, (_eventType, filename) => {
+        if (filename && filename.toString() !== basename(watchedConfigPath)) return;
+        scheduleConfigReload();
+      });
+      configWatcher.on("error", (error) => {
+        logger.warn("config_watch_failed", { reason: error.message });
+      });
+    } catch (error) {
+      logger.warn("config_watch_failed", { reason: error instanceof Error ? error.message : String(error) });
+    }
+  };
 
   const handler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     let holdsRequestSlot = false;
     let longLived = false;
     try {
       if (inFlightRequests >= maxConcurrentRequests) {
-        writeJson(response, 429, { error: { code: "REQUEST_CONCURRENCY_LIMIT", message: "The maximum number of concurrent API requests has been reached." } }, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 429, { error: { code: "REQUEST_CONCURRENCY_LIMIT", message: "The maximum number of concurrent API requests has been reached." } }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       inFlightRequests += 1;
@@ -381,22 +502,47 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
       authenticate(request, apiToken);
 
       if (request.method === "GET" && path === `${API_PREFIX}/openapi.json`) {
-        writeJson(response, 200, openApiDocument, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, openApiDocument, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "GET" && path === `${API_PREFIX}/health`) {
-        writeJson(response, 200, { healthy: true, apiVersion: "v1" }, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, { healthy: true, apiVersion: "v1", configRevision: activeRevision }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "GET" && path === `${API_PREFIX}/sessions`) {
-        writeJson(response, 200, { sessions: store.listSessions() }, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, { sessions: store.listSessions() }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "GET" && (path === `${API_PREFIX}/projects` || path === `${API_PREFIX}/workspaces`)) {
-        writeJson(response, 200, { projects: options.config.projects }, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, { projects: activeConfig.projects }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       const projectEnvironments = /^\/api\/v1\/(?:projects|workspaces)\/([^/]+)\/environments$/.exec(path);
+      const projectAgents = /^\/api\/v1\/(?:projects|workspaces)\/([^/]+)\/agents$/.exec(path);
+      if (request.method === "PUT" && projectAgents?.[1]) {
+        requireJsonContentType(request);
+        const projectId = decodeURIComponent(projectAgents[1]);
+        const body = requiredObject(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs), "The Project Agent binding body must be a JSON object.");
+        const agentIds = parseStringArray(body.agentIds, "agentIds");
+        const defaultAgentId = optionalString(body.defaultAgentId, "defaultAgentId");
+        const snapshot = await configEditor.snapshot();
+        const index = snapshot.config.projects.findIndex((item) => item.id === projectId);
+        if (index < 0) throw new ApiRequestError(404, "PROJECT_NOT_FOUND", `Project "${projectId}" was not found.`);
+        const candidate = structuredClone(snapshot.config);
+        const project = candidate.projects[index] as AgentDockConfig["projects"][number];
+        project.agentIds = agentIds;
+        if (defaultAgentId) project.defaultAgentId = defaultAgentId;
+        else delete project.defaultAgentId;
+        const result = await configEditor.save(
+          candidate,
+          requiredString(body.revision, "revision"),
+          requiredString(body.hash, "hash"),
+          body.confirmHighRisk === undefined ? false : parseBoolean(body.confirmHighRisk, "confirmHighRisk"),
+        );
+        const activation = await activateConfig(result.current.config, "api");
+        writeJson(response, 200, { project: result.current.config.projects[index], ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
+        return;
+      }
       if (request.method === "PUT" && projectEnvironments?.[1]) {
         requireJsonContentType(request);
         const projectId = decodeURIComponent(projectEnvironments[1]);
@@ -417,18 +563,78 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
           requiredString(body.hash, "hash"),
           body.confirmHighRisk === undefined ? false : parseBoolean(body.confirmHighRisk, "confirmHighRisk"),
         );
-        writeJson(response, 200, { project: result.current.config.projects[index], ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+        const activation = await activateConfig(result.current.config, "api");
+        writeJson(response, 200, { project: result.current.config.projects[index], ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
-        if (request.method === "GET" && path === `${API_PREFIX}/engines`) {
-        const snapshot = await configEditor.snapshot();
-        writeJson(response, 200, { engines: environmentCatalog(snapshot.config).engines }, apiToken ? [apiToken] : [], redaction);
+      if (request.method === "GET" && path === `${API_PREFIX}/engines`) {
+        writeJson(response, 200, { engines: environmentCatalog(activeConfig).engines }, apiToken ? [apiToken] : [], activeRedaction);
         return;
+      }
+      if (request.method === "GET" && path === `${API_PREFIX}/agents`) {
+        writeJson(response, 200, { agents: configuredAgents(activeConfig) }, apiToken ? [apiToken] : [], activeRedaction);
+        return;
+      }
+      if (request.method === "POST" && path === `${API_PREFIX}/agents`) {
+        requireJsonContentType(request);
+        const input = parseAgentMutation(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        const snapshot = await configEditor.snapshot();
+        if (configuredAgents(snapshot.config).some((item) => item.id === input.agent.id)) {
+          throw new ApiRequestError(409, "AGENT_ALREADY_EXISTS", `Agent "${input.agent.id}" already exists.`);
+        }
+        const candidate = structuredClone(snapshot.config);
+        candidate.agents.push(input.agent);
+        const preview = await configEditor.preview(candidate);
+        const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
+        const activation = await activateConfig(result.current.config, "api");
+        writeJson(response, 201, { agent: input.agent, ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
+        return;
+      }
+      const agentRoute = /^\/api\/v1\/agents\/([^/]+)$/.exec(path);
+      if (agentRoute?.[1]) {
+        const agentId = decodeURIComponent(agentRoute[1]);
+        if (request.method === "GET") {
+          const agent = configuredAgents(activeConfig).find((item) => item.id === agentId);
+          if (!agent) throw new ApiRequestError(404, "AGENT_NOT_FOUND", `Agent "${agentId}" was not found.`);
+          writeJson(response, 200, { agent }, apiToken ? [apiToken] : [], activeRedaction);
+          return;
+        }
+        if (request.method === "PUT") {
+          requireJsonContentType(request);
+          const input = parseAgentMutation(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+          if (input.agent.id !== agentId) throw new ApiRequestError(400, "INVALID_REQUEST", "The Agent id in the body must match the URL.");
+          const snapshot = await configEditor.snapshot();
+          const index = snapshot.config.agents.findIndex((item) => item.id === agentId);
+          if (index < 0) throw new ApiRequestError(409, "AGENT_LEGACY_DERIVED", `Agent "${agentId}" is derived from an Environment and must be managed through the full configuration.`);
+          const candidate = structuredClone(snapshot.config);
+          candidate.agents[index] = input.agent;
+          const result = await configEditor.save(candidate, input.revision, input.hash, input.confirmHighRisk);
+          const activation = await activateConfig(result.current.config, "api");
+          writeJson(response, 200, { agent: input.agent, ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
+          return;
+        }
+        if (request.method === "DELETE") {
+          requireJsonContentType(request);
+          const body = requiredObject(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs), "The Agent delete body must be a JSON object.");
+          const snapshot = await configEditor.snapshot();
+          const index = snapshot.config.agents.findIndex((item) => item.id === agentId);
+          if (index < 0) throw new ApiRequestError(409, "AGENT_LEGACY_DERIVED", `Agent "${agentId}" is derived from an Environment and must be managed through the full configuration.`);
+          const candidate = structuredClone(snapshot.config);
+          candidate.agents.splice(index, 1);
+          candidate.projects = candidate.projects.map((project) => {
+            const next = { ...project, agentIds: project.agentIds.filter((id) => id !== agentId) };
+            if (next.defaultAgentId === agentId) delete next.defaultAgentId;
+            return next;
+          });
+          const result = await configEditor.save(candidate, requiredString(body.revision, "revision"), requiredString(body.hash, "hash"), body.confirmHighRisk === undefined ? false : parseBoolean(body.confirmHighRisk, "confirmHighRisk"));
+          const activation = await activateConfig(result.current.config, "api");
+          writeJson(response, 200, { deleted: true, ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
+          return;
+        }
       }
       if (request.method === "GET" && path === `${API_PREFIX}/environments`) {
-        const snapshot = await configEditor.snapshot();
-        const environments = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).list();
-        writeJson(response, 200, { environments }, apiToken ? [apiToken] : [], redaction);
+        const environments = await new EnvironmentDirectoryManager(activeConfig, configBaseDirectory(options.configPath)).list();
+        writeJson(response, 200, { environments }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "POST" && path === `${API_PREFIX}/environments`) {
@@ -444,25 +650,27 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         await new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath)).rescan(input.environment.id);
         const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
         const manifest = readEnvironmentManifest(result.current.config, options.configPath, input.environment.id);
-        writeJson(response, 201, { environment: input.environment, manifest, ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+        const activation = await activateConfig(result.current.config, "api");
+        writeJson(response, 201, { environment: input.environment, manifest, ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "GET" && path === `${API_PREFIX}/config`) {
         const snapshot = await configEditor.snapshot();
-        writeJson(response, 200, snapshot, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, snapshot, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "POST" && path === `${API_PREFIX}/config/preview`) {
         requireJsonContentType(request);
         const input = parseConfigPreviewRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
         const preview = await configEditor.preview(input.config, input.dryRun);
-        writeJson(response, 200, serializeConfigPreview(preview), apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, serializeConfigPreview(preview), apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "PUT" && path === `${API_PREFIX}/config`) {
         requireJsonContentType(request);
         const input = parseConfigSaveRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
         const result = await configEditor.save(input.config, input.revision, input.hash, input.confirmHighRisk, input.dryRun);
+        const activation = await activateConfig(result.current.config, "api");
         writeJson(response, 200, {
           config: result.current.config,
           revision: result.current.revision,
@@ -471,19 +679,21 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
           highRisk: result.highRisk,
           backupId: result.backupId,
           auditId: result.auditId,
-          restartRequired: result.restartRequired,
+          restartRequired: activation.restartRequired,
+          ...(activation.reasons.length > 0 ? { restartReasons: activation.reasons } : {}),
           ...(result.dryRun ? { dryRun: result.dryRun } : {}),
-        }, apiToken ? [apiToken] : [], redaction);
+        }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "GET" && path === `${API_PREFIX}/config/backups`) {
-        writeJson(response, 200, { backups: await configEditor.backups() }, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, { backups: await configEditor.backups() }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "POST" && path === `${API_PREFIX}/config/restore`) {
         requireJsonContentType(request);
         const input = parseConfigRestoreRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
         const result = await configEditor.restore(input.backupId, input.revision, input.hash, input.confirmHighRisk);
+        const activation = await activateConfig(result.current.config, "api");
         writeJson(response, 200, {
           config: result.current.config,
           revision: result.current.revision,
@@ -492,8 +702,9 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
           highRisk: result.highRisk,
           backupId: result.backupId,
           auditId: result.auditId,
-          restartRequired: result.restartRequired,
-        }, apiToken ? [apiToken] : [], redaction);
+          restartRequired: activation.restartRequired,
+          ...(activation.reasons.length > 0 ? { restartReasons: activation.reasons } : {}),
+        }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
 
@@ -512,7 +723,8 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         const directories = new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath));
         await directories.copyConfig(sourceId, input.environment.id);
         const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
-        writeJson(response, 201, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, input.environment.id), ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+        const activation = await activateConfig(result.current.config, "api");
+        writeJson(response, 201, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, input.environment.id), ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
 
@@ -526,7 +738,8 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         const preview = await configEditor.preview(candidate);
         await new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath)).importConfig(input.sourceConfigDir, input.environment.id);
         const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
-        writeJson(response, 201, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, input.environment.id), ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+        const activation = await activateConfig(result.current.config, "api");
+        writeJson(response, 201, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, input.environment.id), ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
 
@@ -534,7 +747,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
       if (request.method === "POST" && environmentRescan?.[1]) {
         const snapshot = await configEditor.snapshot();
         const manifest = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).rescan(decodeURIComponent(environmentRescan[1]));
-        writeJson(response, 200, { manifest }, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, { manifest }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
 
@@ -544,16 +757,11 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         const snapshot = await configEditor.snapshot();
         const directories = new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath));
         if (request.method === "GET") {
-          writeJson(response, 200, { backups: await directories.backups(environmentId) }, apiToken ? [apiToken] : [], redaction);
-          return;
-        }
-        if (request.method === "GET" && path === `${API_PREFIX}/agents`) {
-          const snapshot = await configEditor.snapshot();
-          writeJson(response, 200, { agents: configuredAgents(snapshot.config) }, apiToken ? [apiToken] : [], redaction);
+          writeJson(response, 200, { backups: await directories.backups(environmentId) }, apiToken ? [apiToken] : [], activeRedaction);
           return;
         }
         if (request.method === "POST") {
-          writeJson(response, 201, { backup: await directories.backup(environmentId) }, apiToken ? [apiToken] : [], redaction);
+          writeJson(response, 201, { backup: await directories.backup(environmentId) }, apiToken ? [apiToken] : [], activeRedaction);
           return;
         }
       }
@@ -568,7 +776,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
           requiredString(body.backupId, "backupId"),
           body.confirmExternal === undefined ? false : parseBoolean(body.confirmExternal, "confirmExternal"),
         );
-        writeJson(response, 200, { manifest }, apiToken ? [apiToken] : [], redaction);
+        writeJson(response, 200, { manifest }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
 
@@ -578,7 +786,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         const snapshot = await configEditor.snapshot();
         if (request.method === "GET") {
           const status = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).inspect(environmentId);
-          writeJson(response, 200, status, apiToken ? [apiToken] : [], redaction);
+          writeJson(response, 200, status, apiToken ? [apiToken] : [], activeRedaction);
           return;
         }
         if (request.method === "PUT") {
@@ -592,7 +800,8 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
           const preview = await configEditor.preview(candidate);
           await new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath)).rescan(environmentId);
           const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
-          writeJson(response, 200, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, environmentId), ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+          const activation = await activateConfig(result.current.config, "api");
+          writeJson(response, 200, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, environmentId), ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
           return;
         }
         if (request.method === "DELETE") {
@@ -616,7 +825,8 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
             requiredString(body.hash, "hash"),
             body.confirmHighRisk === undefined ? false : parseBoolean(body.confirmHighRisk, "confirmHighRisk"),
           );
-          writeJson(response, 200, { deleted: true, directoriesPreserved: true, ...serializeConfigSave(result) }, apiToken ? [apiToken] : [], redaction);
+          const activation = await activateConfig(result.current.config, "api");
+          writeJson(response, 200, { deleted: true, directoriesPreserved: true, ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
           return;
         }
       }
@@ -630,7 +840,54 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
             ...(projectId ? { projectId } : {}),
             ...(limit ? { limit } : {}),
           }),
-        }, apiToken ? [apiToken] : [], redaction);
+        }, apiToken ? [apiToken] : [], activeRedaction);
+        return;
+      }
+
+      const invokeAgentRoute = /^\/api\/v1\/agents\/([^/]+)\/invoke$/.exec(path);
+      if (request.method === "POST" && invokeAgentRoute?.[1]) {
+        if (!wantsSse(request, url)) {
+          throw new ApiRequestError(406, "SSE_REQUIRED", "Agent invocation streams events. Send Accept: text/event-stream, or use POST /runs for an asynchronous Run.");
+        }
+        requireJsonContentType(request);
+        const agentId = decodeURIComponent(invokeAgentRoute[1]);
+        const input = parseStartRunRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        if (input.agentId && input.agentId !== agentId) {
+          throw new ApiRequestError(400, "INVALID_REQUEST", "The agentId in the request body must match the Agent id in the URL.");
+        }
+        if (input.environmentId) {
+          throw new ApiRequestError(400, "INVALID_REQUEST", "An Agent invocation chooses its Environment from the Agent binding; do not send environmentId.");
+        }
+        const headerKey = request.headers["idempotency-key"];
+        const idempotencyKey = typeof headerKey === "string" ? parseIdempotencyKey(headerKey) : undefined;
+        if (input.idempotencyKey && idempotencyKey && input.idempotencyKey !== idempotencyKey) {
+          throw new ApiRequestError(400, "IDEMPOTENCY_KEY_CONFLICT", "The Idempotency-Key header must match body.idempotencyKey when both are provided.");
+        }
+        const result = await manager.start({
+          ...input,
+          agentId,
+          ...(idempotencyKey ?? input.idempotencyKey ? { idempotencyKey: idempotencyKey ?? input.idempotencyKey } : {}),
+        });
+        const run = store.getRun(result.run.id) ?? result.run;
+        const events = store.listEvents(run.id);
+        longLived = writeSse(
+          response,
+          run.id,
+          events,
+          run.status,
+          store,
+          manager,
+          streams,
+          apiToken ? [apiToken] : [],
+          activeRedaction,
+          () => {
+            if (holdsRequestSlot) {
+              holdsRequestSlot = false;
+              inFlightRequests -= 1;
+            }
+          },
+          [{ type: "accepted", payload: { runId: run.id, created: result.created, eventsUrl: `${API_PREFIX}/runs/${run.id}/events` } }],
+        );
         return;
       }
       if (request.method === "POST" && path === `${API_PREFIX}/runs`) {
@@ -646,7 +903,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
           run: result.run,
           created: result.created,
           eventsUrl: `${API_PREFIX}/runs/${result.run.id}/events`,
-        }, apiToken ? [apiToken] : [], redaction);
+        }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
 
@@ -659,14 +916,14 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         const events = store.listEvents(runId).filter((event) => event.sequence > after);
         if (wantsSse(request, url)) {
           if (events.length > MAX_SSE_BUFFERED_EVENTS) throw new ApiRequestError(413, "SSE_REPLAY_TOO_LARGE", "The requested SSE replay is too large; reconnect with a later cursor.");
-          longLived = writeSse(response, runId, events, run.status, store, manager, streams, apiToken ? [apiToken] : [], redaction, () => {
+          longLived = writeSse(response, runId, events, run.status, store, manager, streams, apiToken ? [apiToken] : [], activeRedaction, () => {
             if (holdsRequestSlot) {
               holdsRequestSlot = false;
               inFlightRequests -= 1;
             }
           });
         } else {
-          writeJson(response, 200, { events }, apiToken ? [apiToken] : [], redaction);
+          writeJson(response, 200, { events }, apiToken ? [apiToken] : [], activeRedaction);
         }
         return;
       }
@@ -677,18 +934,18 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         if (request.method === "GET") {
           const run = store.getRun(runId);
           if (!run) throw new ApiRequestError(404, "RUN_NOT_FOUND", `Run "${runId}" was not found.`);
-          writeJson(response, 200, { run }, apiToken ? [apiToken] : [], redaction);
+          writeJson(response, 200, { run }, apiToken ? [apiToken] : [], activeRedaction);
           return;
         }
         if (request.method === "POST" && url.searchParams.get("action") === "cancel") {
-          writeCancelResult(response, manager.cancel(runId), runId, apiToken ? [apiToken] : [], redaction);
+          writeCancelResult(response, manager.cancel(runId), runId, apiToken ? [apiToken] : [], activeRedaction);
           return;
         }
       }
 
       const cancelRoute = /^\/api\/v1\/runs\/([^/]+)\/cancel$/.exec(path);
       if (request.method === "POST" && cancelRoute?.[1]) {
-        writeCancelResult(response, manager.cancel(decodeURIComponent(cancelRoute[1])), decodeURIComponent(cancelRoute[1]), apiToken ? [apiToken] : [], redaction);
+        writeCancelResult(response, manager.cancel(decodeURIComponent(cancelRoute[1])), decodeURIComponent(cancelRoute[1]), apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
 
@@ -704,7 +961,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
           message: apiError.message,
           ...(apiError.details ? { details: apiError.details } : {}),
         },
-      }, apiToken ? [apiToken] : [], redaction);
+      }, apiToken ? [apiToken] : [], activeRedaction);
     } finally {
       if (holdsRequestSlot && !longLived) inFlightRequests -= 1;
     }
@@ -735,12 +992,21 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         throw error;
       }
       const address = current.address() as AddressInfo;
+      startConfigWatcher();
       return { host, port: address.port };
     },
 
     async close(): Promise<void> {
       if (closeOperation) return closeOperation;
       closeOperation = (async (): Promise<void> => {
+        closing = true;
+        if (configReloadTimer) {
+          clearTimeout(configReloadTimer);
+          configReloadTimer = undefined;
+        }
+        configWatcher?.close();
+        configWatcher = undefined;
+        await configApplyChain;
         await manager.shutdown();
         for (const stream of streams) stream.end();
         streams.clear();
@@ -758,7 +1024,12 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
 
 export async function createAgentDockApiServerFromConfig(configPath: string): Promise<AgentDockApiServer> {
   const config = await loadConfig(configPath);
-  return createAgentDockApiServer({ config, configPath, registry: await createConfiguredRuntimeRegistry(config, configPath) });
+  return createAgentDockApiServer({
+    config,
+    configPath,
+    registry: await createConfiguredRuntimeRegistry(config, configPath),
+    registryFactory: createConfiguredRuntimeRegistry,
+  });
 }
 
 function parseStartRunRequest(body: unknown): Omit<StartRunRequest, "idempotencyKey"> & { idempotencyKey?: string } {
@@ -809,6 +1080,24 @@ interface EnvironmentMutationRequest {
   revision: string;
   hash: string;
   confirmHighRisk: boolean;
+}
+
+interface AgentMutationRequest {
+  agent: AgentDockConfig["agents"][number];
+  revision: string;
+  hash: string;
+  confirmHighRisk: boolean;
+}
+
+function parseAgentMutation(body: unknown): AgentMutationRequest {
+  const input = requiredObject(body, "The Agent request body must be a JSON object.");
+  const agent = requiredObject(input.agent, "The request must include an Agent object.") as unknown as AgentDockConfig["agents"][number];
+  return {
+    agent,
+    revision: requiredString(input.revision, "revision"),
+    hash: requiredString(input.hash, "hash"),
+    confirmHighRisk: input.confirmHighRisk === undefined ? false : parseBoolean(input.confirmHighRisk, "confirmHighRisk"),
+  };
 }
 
 interface EnvironmentImportRequest extends EnvironmentMutationRequest {
@@ -889,7 +1178,8 @@ function serializeConfigPreview(preview: ConfigPreview): Record<string, unknown>
   };
 }
 
-function serializeConfigSave(result: ConfigSaveResult): Record<string, unknown> {
+function serializeConfigSave(result: ConfigSaveResult, activation?: ConfigActivationResult): Record<string, unknown> {
+  const restartRequired = activation?.restartRequired ?? result.restartRequired;
   return {
     config: result.current.config,
     revision: result.current.revision,
@@ -898,8 +1188,25 @@ function serializeConfigSave(result: ConfigSaveResult): Record<string, unknown> 
     highRisk: result.highRisk,
     backupId: result.backupId,
     auditId: result.auditId,
-    restartRequired: result.restartRequired,
+    restartRequired,
+    ...(restartRequired && activation && activation.reasons.length > 0 ? { restartReasons: activation.reasons } : {}),
   };
+}
+
+function configRestartReasons(before: AgentDockConfig, after: AgentDockConfig, configPath: string): string[] {
+  const reasons: string[] = [];
+  if (!samePath(configDataPath(before, configPath), configDataPath(after, configPath))) {
+    reasons.push("Changing dataDir requires an API restart because the existing SQLite store cannot be moved while the server is running.");
+  }
+  return reasons;
+}
+
+function samePath(left: string, right: string): boolean {
+  const normalizedLeft = resolve(left);
+  const normalizedRight = resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
 }
 
 function readEnvironmentManifest(config: AgentDockConfig, configPath: string, environmentId: string): ReturnType<typeof readEnvironmentManifestSync> {
@@ -1037,6 +1344,7 @@ function writeSse(
   sensitiveValues: readonly string[],
   redaction: RedactionOptions,
   releaseRequestSlot: () => void,
+  preludeEvents: readonly SsePreludeEvent[] = [],
 ): boolean {
   response.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -1045,6 +1353,7 @@ function writeSse(
     "x-accel-buffering": "no",
   });
   response.write(": agentdock event stream\n\n");
+  for (const event of preludeEvents) writeSsePreludeEvent(response, event, sensitiveValues, redaction);
   const queue = events.map((event) => redactSensitiveValue(event, sensitiveValues, redaction));
   let ended = false;
   let unsubscribe = (): void => undefined;
@@ -1094,14 +1403,16 @@ function writeSse(
       }
       flush();
     });
+    // Subscribe before this backfill so an event persisted between the initial
+    // read and the subscription cannot disappear from a newly opened stream.
+    for (const event of store.listEvents(runId)) {
+      if (event.sequence <= lastKnownSequence) continue;
+      queue.push(redactSensitiveValue(event, sensitiveValues, redaction));
+      lastKnownSequence = event.sequence;
+    }
     const current = store.getRun(runId);
     if (current && isTerminal(current.status)) {
       terminal = true;
-      for (const event of store.listEvents(runId)) {
-        if (event.sequence <= lastKnownSequence) continue;
-        queue.push(redactSensitiveValue(event, sensitiveValues, redaction));
-        lastKnownSequence = event.sequence;
-      }
     }
   }
   response.once("close", cleanup);
@@ -1112,6 +1423,11 @@ function writeSse(
 function writeSseEvent(response: ServerResponse, event: RunEvent): boolean {
   if (response.writableEnded) return true;
   return response.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+}
+
+function writeSsePreludeEvent(response: ServerResponse, event: SsePreludeEvent, sensitiveValues: readonly string[], redaction: RedactionOptions): boolean {
+  if (response.writableEnded) return true;
+  return response.write(`event: ${event.type}\ndata: ${JSON.stringify(redactSensitiveValue(event.payload, sensitiveValues, redaction))}\n\n`);
 }
 
 function writeCancelResult(response: ServerResponse, result: ReturnType<LocalRunManager["cancel"]>, runId: string, sensitiveValues: readonly string[], redaction: RedactionOptions): void {

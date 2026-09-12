@@ -33,6 +33,12 @@ export class RunService {
     if (existingSession && existingSession.engineId !== options.context.engine.id) {
       throw new Error(`Session "${existingSession.id}" belongs to Engine "${existingSession.engineId}", not "${options.context.engine.id}".`);
     }
+    if (existingSession?.agentId && existingSession.agentId !== options.context.agent?.id) {
+      throw new Error(`Session "${existingSession.id}" belongs to Agent "${existingSession.agentId}", not "${options.context.agent?.id ?? "the selected Agent"}".`);
+    }
+    if (existingSession?.environmentId && existingSession.environmentId !== options.context.agentEnvironment.id) {
+      throw new Error(`Session "${existingSession.id}" belongs to Environment "${existingSession.environmentId}", not "${options.context.agentEnvironment.id}".`);
+    }
     if (existingSession?.status !== undefined && existingSession.status !== "active") {
       throw new Error(`Session "${existingSession.id}" is archived and cannot accept a new Run.`);
     }
@@ -48,7 +54,9 @@ export class RunService {
       session = this.store.createSession({
         id: randomUUID(),
         ...(options.context.project ? { projectId: options.context.project.id } : {}),
+        ...(options.context.agent ? { agentId: options.context.agent.id } : {}),
         engineId: options.context.engine.id,
+        environmentId: options.context.agentEnvironment.id,
         resumable: created.supported && created.state !== "pending",
         ...(created.runtimeSessionId ? { runtimeSessionId: created.runtimeSessionId } : {}),
       });

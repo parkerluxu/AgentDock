@@ -64,7 +64,7 @@ node dist/cli.js api serve --config examples/config.example.json --port 4177
 3. 先看“执行快照”，确认工作目录和 Permission。
 4. 再看事件时间线，了解 Agent 何时开始、调用了什么工具、最后为何成功或失败。
 
-如果小王发现配置不合适，例如想禁止写入文件，他进入“配置中心”，修改 Permission，点击“预览变更”，确认差异后保存并重启 API。下一次 Run 会使用新规则，旧 Run 的快照不会被改写。
+如果小王发现配置不合适，例如想禁止写入文件，他进入“配置中心”，修改 Permission，点击“预览变更”并保存。安全变更会立即热加载，下一次 Run 会使用新规则，旧 Run 的快照不会被改写；如果响应提示需要重启，再重启 API。
 
 ## 第五步：把结果交给脚本
 
@@ -82,4 +82,4 @@ GET  /api/v1/runs/<run-id>/events?stream=sse
 1. 先 dry-run，再 execute，避免“还没看清权限就开跑”。
 2. 用 Project 和 Agent 固定工作范围，不靠每次手写路径。
 3. 用 UI 看快照和事件，用 CLI/API 做执行和自动化。
-4. 修改配置后要预览、保存、重启；历史 Run 仍保持原样。
+4. 修改配置后要预览、保存；安全变更会热加载，历史 Run 仍保持原样。

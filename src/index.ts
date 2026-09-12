@@ -26,3 +26,4 @@ export * from "./runtime/router.js";
 export * from "./runtime/run-service.js";
 export * from "./runtime/session-service.js";
 export * from "./environment/manager.js";
+export * from "./sdk/client.js";

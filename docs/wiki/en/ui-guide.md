@@ -26,9 +26,9 @@ Each entity supports Form and Advanced JSON modes. Use Form for common fields an
 2. Click “Preview changes”.
 3. Review validation, diff, dry-run, and Permission issues.
 4. Confirm high-risk changes such as writes, network, shell/command, or Secret Reference changes.
-5. Save, then restart the API.
+5. Save. Safe changes are hot-reloaded; restart the API only when the response says it is required.
 
-Revision/hash checks prevent overwriting a newer configuration. Backups can be restored from the Backups area; restoring also requires an API restart.
+Revision/hash checks prevent overwriting a newer configuration. Backups can be restored from the Backups area; restoring is hot-reloaded when safe.
 
 ## UI limits
 

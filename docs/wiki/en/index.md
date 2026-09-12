@@ -2,7 +2,7 @@
 
 AgentDock is a local-first control plane for discovering and managing AI Agent Engines, isolated Environments, permission boundaries, and auditable Runs. It provides a CLI, a loopback HTTP API, a built-in Control Center, SQLite persistence, and a local Adapter lifecycle.
 
-This Wiki is a VitePress site backed by multiple Markdown pages. A good reading path is:
+A good reading path is:
 
 1. [Getting started](./getting-started) — install, build, and run your first dry-run.
 2. [Configuration](./configuration) — understand Engines, Agents, Environments, Permissions, and Projects.
@@ -15,6 +15,7 @@ This Wiki is a VitePress site backed by multiple Markdown pages. A good reading 
 - Pre-execution routing for working directories, Environments, network, and filesystem policy.
 - Immutable Run snapshots containing the execution context and Environment hash.
 - CLI, API, and Control Center access to history, events, and configuration.
+- A zero-dependency Node client SDK for one-call Agent invocation with SSE reconnect and deduplication.
 - SQLite persistence for Runs, Sessions, events, and idempotency keys.
 
 ## Version and boundaries

@@ -18,14 +18,19 @@ export interface LoggerOptions {
 const levelOrder: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
 export class AgentDockLogger implements Logger {
-  private readonly level: LogLevel;
+  private level: LogLevel;
   private readonly sink: Pick<NodeJS.WritableStream, "write">;
-  private readonly redaction: RedactionOptions;
+  private redaction: RedactionOptions;
 
   public constructor(options: LoggerOptions = {}) {
     this.level = options.level ?? "warn";
     this.sink = options.sink ?? process.stderr;
     this.redaction = options.redaction ?? {};
+  }
+
+  public update(options: { level: LogLevel; redaction: RedactionOptions }): void {
+    this.level = options.level;
+    this.redaction = options.redaction;
   }
 
   public debug(message: string, fields: Record<string, unknown> = {}): void {

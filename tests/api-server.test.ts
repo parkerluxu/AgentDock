@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -69,6 +69,15 @@ async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {
   throw new Error("Timed out while waiting for the expected API state.");
 }
 
+async function waitForAsync(check: () => Promise<boolean>, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out while waiting for the expected asynchronous API state.");
+}
+
 function createFixture(delayMs: number, createSessionDelayMs = 0) {
   const directory = mkdtempSync(join(tmpdir(), "agentdock-api-"));
   const store = new SqliteRunStore(join(directory, "agentdock.db"));
@@ -118,11 +127,16 @@ describe("AgentDock local API server", () => {
       const projects = await fetch(`${baseUrl}/projects`, { headers: authHeaders(fixture.token) });
       expect(projects.status).toBe(200);
       expect((await projects.json() as { projects: Array<{ id: string }> }).projects[0]?.id).toBe("workspace");
+      const agents = await fetch(`${baseUrl}/agents`, { headers: authHeaders(fixture.token) });
+      expect(agents.status).toBe(200);
+      expect((await agents.json() as { agents: Array<{ id: string }> }).agents[0]?.id).toBe("default");
       const openapi = await fetch(`${baseUrl}/openapi.json`, { headers: authHeaders(fixture.token) });
       const openapiBody = await openapi.json() as { openapi: string; paths: Record<string, unknown> };
       expect(openapi.status).toBe(200);
       expect(openapiBody.openapi).toBe("3.0.3");
       expect(openapiBody.paths["/runs/{runId}/events"]).toBeDefined();
+      expect(openapiBody.paths["/agents/{agentId}/invoke"]).toBeDefined();
+      expect(openapiBody.paths["/projects/{projectId}/agents"]).toBeDefined();
 
       const created = await fetch(`${baseUrl}/runs`, {
         method: "POST",
@@ -150,6 +164,96 @@ describe("AgentDock local API server", () => {
       expect(stream).not.toContain("id: 0");
       expect(stream).toContain("id: 1");
       expect(stream).toContain("id: 3");
+    } finally {
+      await fixture.api.close();
+      fixture.store.close();
+      rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("invokes an Agent through one SSE request and preserves the Run replay path", async () => {
+    const fixture = createFixture(20);
+    try {
+      const address = await fixture.api.listen();
+      const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const invoked = await fetch(`${baseUrl}/agents/default/invoke`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, {
+          "content-type": "application/json",
+          accept: "text/event-stream",
+          "idempotency-key": "agent-invocation-1",
+        }),
+        body: JSON.stringify({ task: "inspect", projectId: "workspace" }),
+      });
+      expect(invoked.status).toBe(200);
+      expect(invoked.headers.get("content-type")).toContain("text/event-stream");
+      const stream = await invoked.text();
+      expect(stream).toContain("event: accepted");
+      expect(stream).toContain('"created":true');
+      expect(stream).toContain('"eventsUrl":"/api/v1/runs/');
+      expect(stream).toContain("id: 0");
+      expect(stream).toContain('"status":"succeeded"');
+      expect(fixture.store.listSessions()[0]).toMatchObject({ agentId: "default", environmentId: "default" });
+
+      const withoutSse = await fetch(`${baseUrl}/agents/default/invoke`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ task: "missing-stream", projectId: "workspace" }),
+      });
+      expect(withoutSse.status).toBe(406);
+    } finally {
+      await fixture.api.close();
+      fixture.store.close();
+      rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("registers, updates and removes an Agent without editing the full configuration", async () => {
+    const fixture = createFixture(10);
+    try {
+      const address = await fixture.api.listen();
+      const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const current = await fetch(`${baseUrl}/config`, { headers: authHeaders(fixture.token) });
+      const snapshot = await current.json() as { config: unknown; revision: string; hash: string };
+      const agent = { id: "reviewer", engineId: "fake", environmentId: "default", permissionId: "readonly", enabled: true, processEnv: {}, settings: {} };
+      const created = await fetch(`${baseUrl}/agents`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ agent, revision: snapshot.revision, hash: snapshot.hash }),
+      });
+      expect(created.status).toBe(201);
+      expect((await created.json() as { agent: { id: string } }).agent.id).toBe("reviewer");
+      const listed = await fetch(`${baseUrl}/agents`, { headers: authHeaders(fixture.token) });
+      expect((await listed.json() as { agents: Array<{ id: string }> }).agents.map((item) => item.id)).toContain("reviewer");
+
+      const afterCreate = await fetch(`${baseUrl}/config`, { headers: authHeaders(fixture.token) });
+      const afterCreateBody = await afterCreate.json() as { revision: string; hash: string };
+      const updated = await fetch(`${baseUrl}/agents/reviewer`, {
+        method: "PUT",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ agent: { ...agent, settings: { mode: "review" } }, revision: afterCreateBody.revision, hash: afterCreateBody.hash }),
+      });
+      expect(updated.status).toBe(200);
+
+      const afterUpdate = await fetch(`${baseUrl}/config`, { headers: authHeaders(fixture.token) });
+      const afterUpdateBody = await afterUpdate.json() as { revision: string; hash: string };
+      const bound = await fetch(`${baseUrl}/projects/workspace/agents`, {
+        method: "PUT",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ agentIds: ["reviewer"], defaultAgentId: "reviewer", revision: afterUpdateBody.revision, hash: afterUpdateBody.hash }),
+      });
+      expect(bound.status).toBe(200);
+      expect((await bound.json() as { project: { agentIds: string[]; defaultAgentId: string } }).project).toMatchObject({ agentIds: ["reviewer"], defaultAgentId: "reviewer" });
+
+      const afterBinding = await fetch(`${baseUrl}/config`, { headers: authHeaders(fixture.token) });
+      const afterBindingBody = await afterBinding.json() as { revision: string; hash: string };
+      const removed = await fetch(`${baseUrl}/agents/reviewer`, {
+        method: "DELETE",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ revision: afterBindingBody.revision, hash: afterBindingBody.hash }),
+      });
+      expect(removed.status).toBe(200);
+      expect((await fetch(`${baseUrl}/agents/reviewer`, { headers: authHeaders(fixture.token) })).status).toBe(404);
     } finally {
       await fixture.api.close();
       fixture.store.close();
@@ -205,11 +309,21 @@ describe("AgentDock local API server", () => {
       });
       const savedBody = await saved.json() as { restartRequired: boolean; backupId: string; auditId: string; revision: string };
       expect(saved.status, JSON.stringify(savedBody)).toBe(200);
-      expect(savedBody).toMatchObject({ restartRequired: true });
+      expect(savedBody).toMatchObject({ restartRequired: false });
       expect(savedBody.backupId).toContain("config.json.backup.");
       expect(savedBody.auditId).toEqual(expect.any(String));
       expect(JSON.parse(readFileSync(join(fixture.directory, "config.json"), "utf8"))).toMatchObject({ engines: [{ version: "1.0.1" }] });
       expect(fixture.store.getRun(runBody.run.id)?.snapshot).toEqual(runBody.run.snapshot);
+
+      const afterSaveRun = await fetch(`${baseUrl}/runs`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ task: "after-config-save", projectId: "workspace" }),
+      });
+      const afterSaveRunBody = await afterSaveRun.json() as { run: { id: string } };
+      expect(afterSaveRun.status).toBe(202);
+      await waitFor(() => fixture.store.getRun(afterSaveRunBody.run.id)?.status === "succeeded");
+      expect((fixture.store.getRun(afterSaveRunBody.run.id)?.snapshot as { engine?: { version?: string } }).engine?.version).toBe("1.0.1");
 
       const conflict = await fetch(`${baseUrl}/config`, {
         method: "PUT",
@@ -252,6 +366,59 @@ describe("AgentDock local API server", () => {
       await fixture.api.close();
       fixture.store.close();
       rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("hot reloads a valid external config change and keeps the previous runtime on invalid input", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agentdock-api-hot-reload-"));
+    const configPath = join(directory, "config.json");
+    const config = validateConfig({
+      version: 1,
+      dataDir: "data",
+      engines: [{ id: "fake", adapter: "fake", capabilities: ["execute", "cancel"] }],
+      environmentPermissions: [{ id: "readonly", filesystem: { roots: ["."], write: false }, environment: { allow: [] }, network: "deny" }],
+      environments: [{ id: "default", engineId: "fake", permissionId: "readonly", settings: {} }],
+      projects: [{ id: "workspace", rootDir: process.cwd(), environmentIds: ["default"], defaultEnvironmentId: "default" }],
+    });
+    writeFileSync(configPath, JSON.stringify(config, null, 2));
+    const store = new SqliteRunStore(join(directory, "data", "agentdock.db"));
+    const registry = new RuntimeRegistry();
+    registry.register("fake", (runtime) => new DelayedAdapter(runtime, 10));
+    const api = createAgentDockApiServer({ config, configPath, store, registry, apiToken: "hot-reload-api-token-1234567890", configWatchDebounceMs: 20 });
+    try {
+      const address = await api.listen();
+      const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const changed = validateConfig({
+        ...config,
+        environments: [...config.environments, { id: "alternate", engineId: "fake", permissionId: "readonly", settings: {} }],
+        projects: [{ ...config.projects[0]!, environmentIds: ["default", "alternate"] }],
+      });
+      writeFileSync(configPath, JSON.stringify(changed, null, 2));
+      await waitForAsync(async () => {
+        const response = await fetch(`${baseUrl}/environments`, { headers: authHeaders("hot-reload-api-token-1234567890") });
+        const body = await response.json() as { environments: Array<{ environment: { id: string } }> };
+        return response.status === 200 && body.environments.some((item) => item.environment.id === "alternate");
+      });
+
+      const runResponse = await fetch(`${baseUrl}/runs`, {
+        method: "POST",
+        headers: authHeaders("hot-reload-api-token-1234567890", { "content-type": "application/json" }),
+        body: JSON.stringify({ task: "hot reload", projectId: "workspace", environmentId: "alternate" }),
+      });
+      const runBody = await runResponse.json() as { run: { id: string } };
+      expect(runResponse.status).toBe(202);
+      await waitFor(() => store.getRun(runBody.run.id)?.status === "succeeded");
+      expect(store.getRun(runBody.run.id)?.environmentId).toBe("alternate");
+
+      writeFileSync(configPath, "{ invalid json");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const afterInvalid = await fetch(`${baseUrl}/environments`, { headers: authHeaders("hot-reload-api-token-1234567890") });
+      const afterInvalidBody = await afterInvalid.json() as { environments: Array<{ environment: { id: string } }> };
+      expect(afterInvalidBody.environments.some((item) => item.environment.id === "alternate")).toBe(true);
+    } finally {
+      await api.close();
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
     }
   });
 

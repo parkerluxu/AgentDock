@@ -44,13 +44,13 @@ node dist/cli.js doctor --config <config-path>
 
 ## `ENVIRONMENT_RESCAN_REQUIRED`
 
-说明原生配置目录在上次扫描后发生了变化。确认变更可信后调用：
+说明原生配置目录在下一次 Run 开始前已经发生了变化。确认变更可信后调用：
 
 ```text
 POST /api/v1/environments/<environment-id>/rescan
 ```
 
-CLI 的 `run execute` 和 `session create` 会在启动前自动扫描；API 只有在缺少 manifest 时自动创建，检测到漂移会拒绝执行。
+Agent 在 Run 期间产生的 session、缓存和 runtime 状态会在 Run 结束后自动同步，不需要每次手动 rescan。CLI 的 `run execute` 和 `session create` 会在启动前自动扫描；API 在启动前检测到漂移仍会拒绝执行，`managed` 与 `external` 都适用。
 
 ## API 无法连接或 token 无效
 

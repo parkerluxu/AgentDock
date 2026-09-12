@@ -28,11 +28,13 @@ Confirm the Adapter is installed/enabled and the configured binary is available 
 
 ## Environment drift
 
-After confirming the change is trusted, rescan:
+If the environment changed before the next Run starts, confirm the change is trusted and rescan:
 
 ```text
 POST /api/v1/environments/<environment-id>/rescan
 ```
+
+Changes made by the Agent during an active Run, such as sessions, caches, and runtime state, are reconciled automatically when the Run finishes. This applies to both `managed` and `external` Environments.
 
 ## API or token problems
 

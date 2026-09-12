@@ -85,6 +85,6 @@ npm run config:validate -- .agentdock/config.json
 node dist/cli.js doctor --config .agentdock/config.json
 ```
 
-校验包括 JSON/schema、ID 唯一性、引用存在性、Project 默认项归属和 Environment 继承环。Web 配置中心保存前还会做跨对象校验、dry-run、差异和高风险确认；保存使用 revision/hash 冲突检测、临时文件和原子替换，成功后需要重启 API。
+校验包括 JSON/schema、ID 唯一性、引用存在性、Project 默认项归属和 Environment 继承环。Web 配置中心保存前还会做跨对象校验、dry-run、差异和高风险确认；保存使用 revision/hash 冲突检测、临时文件和原子替换，安全变更会自动热加载。API 也会监听配置文件的外部修改；无效修改不会替换当前有效运行配置。
 
 完整字段、迁移注意事项和数据策略见[配置参考](https://github.com/parkerluxu/AgentDock/blob/main/docs/configuration-reference.zh-CN.md)。

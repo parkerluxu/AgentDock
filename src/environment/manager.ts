@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, readlink, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
 import type { AgentDockConfig, ConfigEnvironment } from "../config/schema.js";
@@ -9,7 +9,8 @@ import type { AgentEnvironment, EnvironmentManifest } from "../core/types.js";
 const MANIFEST_NAME = "manifest.json";
 const MAX_CONFIG_FILES = 10_000;
 const MAX_CONFIG_BYTES = 64 * 1024 * 1024;
-const IGNORED_CONFIG_ROOTS = new Set(["cache", "logs", "browser", "tmp", ".tmp", "attachments", "backups", "sessions", "archived_sessions", "visualizations", "sqlite", ".sandbox", ".sandbox-bin", ".sandbox-secrets", "process_manager", "thread-writer-locks", "mcp-oauth-locks", "dictation-history", "computer-use", "pets", "memories", "ambient-suggestions"]);
+const IGNORED_CONFIG_ROOTS = new Set(["cache", "logs", "browser", "tmp", ".tmp", "attachments", "backups", "sessions", "archived_sessions", "visualizations", "sqlite", "node_repl", ".sandbox", ".sandbox-bin", ".sandbox-secrets", "process_manager", "thread-writer-locks", "mcp-oauth-locks", "dictation-history", "computer-use", "pets", "memories", "ambient-suggestions"]);
+const IGNORED_CONFIG_FILES = new Set(["models_cache.json", "auth.json", ".credentials.json", "credentials.json", "token.json", ".token", "oauth.json", ".env"]);
 const IGNORED_PLUGIN_ROOTS = new Set(["cache", "node_modules", "data", "prebuilds", ".plugin-appserver", ".marketplace-plugin-source-staging"]);
 
 export interface EnvironmentStatus {
@@ -152,6 +153,21 @@ export class EnvironmentDirectoryManager {
     return operation;
   }
 
+  /**
+   * Runtime processes may update their own home with caches and state while a
+   * Run is active. Reconcile those changes after the Run has finished, while
+   * keeping the pre-run drift check strict for changes made while idle.
+   */
+  public async reconcileAfterRun(environmentId: string): Promise<boolean> {
+    const status = await this.inspect(environmentId);
+    if (!status.healthy) throw new EnvironmentManagerError("ENVIRONMENT_DIRECTORY_INVALID", status.issues.join("; "));
+    if (!status.manifest || status.drifted) {
+      await this.rescan(environmentId);
+      return true;
+    }
+    return false;
+  }
+
   private async rescanInternal(environmentId: string): Promise<EnvironmentManifest> {
     const environment = this.requireEnvironment(environmentId);
     const directories = resolveEnvironmentDirectories(this.config, this.baseDirectory, environment);
@@ -188,8 +204,7 @@ export class EnvironmentDirectoryManager {
     const target = resolveEnvironmentDirectories(this.config, this.baseDirectory, targetEnvironment);
     await assertDirectory(source.configDir as string, "source configDir");
     if (existsSync(target.configDir as string)) throw new EnvironmentManagerError("ENVIRONMENT_DIRECTORY_INVALID", `Target configDir already exists: ${target.configDir}. Choose a new Environment ID or reuse the existing directory.`);
-    await mkdir(dirname(target.configDir), { recursive: true });
-    await cp(source.configDir as string, target.configDir as string, { recursive: true, force: false, errorOnExist: true, dereference: true, filter: (candidate) => !shouldSkipConfigPath(source.configDir as string, candidate) });
+    await copyConfigDirectory(source.configDir as string, target.configDir as string);
     await this.rescan(targetEnvironmentId);
   }
 
@@ -200,8 +215,7 @@ export class EnvironmentDirectoryManager {
     if (targetEnvironment.directoryMode === "managed") {
       const target = resolveEnvironmentDirectories(this.config, this.baseDirectory, targetEnvironment);
       if (existsSync(target.configDir as string)) throw new EnvironmentManagerError("ENVIRONMENT_DIRECTORY_INVALID", `Target configDir already exists: ${target.configDir}. Choose a new Environment ID or reuse the existing directory.`);
-      await mkdir(dirnameConfigured(target.configDir), { recursive: true });
-      await cp(source, target.configDir as string, { recursive: true, force: false, errorOnExist: true, dereference: true, filter: (candidate) => !shouldSkipConfigPath(source, candidate) });
+      await copyConfigDirectory(source, target.configDir as string);
     }
     await this.rescan(targetEnvironmentId);
   }
@@ -321,9 +335,26 @@ export async function hashConfigDirectory(directory: string): Promise<string> {
 function shouldSkipConfigPath(sourceRoot: string, candidate: string): boolean {
   const relativePath = relative(sourceRoot, candidate);
   if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) return false;
+  try {
+    if (lstatSync(candidate).isSymbolicLink()) return true;
+  } catch {
+    // Let the copy or scan report a disappearing path as an ordinary I/O error.
+  }
   const parts = relativePath.split(/[\\/]+/u).map((part) => part.toLowerCase());
   const leaf = parts.at(-1) ?? "";
-  return IGNORED_CONFIG_ROOTS.has(parts[0] ?? "") || (parts[0] === "plugins" && IGNORED_PLUGIN_ROOTS.has(parts[1] ?? "")) || /\.sqlite(?:-(?:wal|shm))?$/u.test(leaf) || leaf === "history.jsonl" || leaf === "session_index.jsonl" || leaf === "transcription-history.jsonl";
+  return IGNORED_CONFIG_ROOTS.has(parts[0] ?? "") || IGNORED_CONFIG_FILES.has(leaf) || leaf.startsWith(".env.") || (parts[0] === "plugins" && IGNORED_PLUGIN_ROOTS.has(parts[1] ?? "")) || /\.sqlite(?:-(?:wal|shm))?$/u.test(leaf) || leaf === "history.jsonl" || leaf === "session_index.jsonl" || leaf === "transcription-history.jsonl";
+}
+
+async function copyConfigDirectory(source: string, target: string): Promise<void> {
+  await mkdir(dirnameConfigured(target), { recursive: true });
+  const staging = joinConfigured(dirnameConfigured(target), `.${basenameConfigured(target)}.copy-${randomUUID()}`);
+  try {
+    await cp(source, staging, { recursive: true, force: false, errorOnExist: true, dereference: true, filter: (candidate) => !shouldSkipConfigPath(source, candidate) });
+    await rename(staging, target);
+  } catch (error) {
+    try { await rm(staging, { recursive: true, force: true }); } catch { /* Best-effort cleanup of a failed copy. */ }
+    throw error;
+  }
 }
 
 async function assertDirectory(path: string, label: string): Promise<void> {

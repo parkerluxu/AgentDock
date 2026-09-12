@@ -65,9 +65,9 @@ Environment Permission 的 Secret 区域只编辑 provider/key reference，界�
 3. 阅读校验结果、字段差异、dry-run 和 Permission 问题。
 4. 如果出现写入、网络、shell/command 或 Secret Reference 变化，勾选高风险确认。
 5. 点击“保存配置”。
-6. 重启 API 服务，让新配置生效。
+6. 安全配置会自动热加载；如果响应返回 `restartRequired: true`，再重启 API 服务。
 
-页面会使用 revision/hash 检测并发修改；如果另一个进程先保存，当前保存会被拒绝，需要重新加载后再编辑。配置保存会产生备份，可在“备份”区域恢复；恢复同样需要重启 API。
+页面会使用 revision/hash 检测并发修改；如果另一个进程先保存，当前保存会被拒绝，需要重新加载后再编辑。配置保存会产生备份，可在“备份”区域恢复；恢复也会在安全时自动热加载。数据目录变化等不能安全切换的情况会返回重启原因。
 
 ## 6. UI 能做什么、不能做什么
 
@@ -82,4 +82,4 @@ Environment Permission 的 Secret 区域只编辑 provider/key reference，界�
 | 读取 Secret 明文 | 不支持 |
 | 把 API 暴露到远程主机 | 不支持，也不建议 |
 
-遇到“配置已保存但运行结果没变化”，通常是忘记重启 API；遇到 Environment 漂移，则先按[Environment 管理](./environments)重新扫描。
+遇到“配置已保存但运行结果没变化”，先检查保存响应中的 `restartRequired` 和 `restartReasons`；遇到 Environment 漂移，则先按[Environment 管理](./environments)重新扫描。

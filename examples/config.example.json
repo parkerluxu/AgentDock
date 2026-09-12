@@ -1,25 +1,144 @@
 {
   "version": 1,
   "dataDir": "../.agentdock/data",
-  "storage": { "saveOutput": true },
-  "logging": { "level": "warn" },
-  "redaction": { "additionalKeys": [] },
+  "storage": {
+    "saveOutput": true
+  },
+  "logging": {
+    "level": "warn"
+  },
+  "redaction": {
+    "additionalKeys": []
+  },
   "engines": [
-    { "id": "claude-code", "adapter": "claude-code", "binary": "claude", "args": [], "enabled": true, "capabilities": ["execute", "stream_events", "cancel", "create_session", "resume_session", "healthcheck"] },
-    { "id": "codex", "adapter": "codex", "binary": "codex", "args": [], "enabled": true, "capabilities": ["execute", "stream_events", "cancel", "resume_session", "healthcheck"] }
-  ],
-  "environmentPermissions": [
-    { "id": "readonly-local", "filesystem": { "roots": ["."], "write": false }, "environment": { "allow": ["PATH", "HOME"] }, "network": "deny" }
+    {
+      "id": "claude-code",
+      "adapter": "claude-code",
+      "binary": "claude",
+      "args": [],
+      "enabled": true,
+      "capabilities": [
+        "execute",
+        "stream_events",
+        "cancel",
+        "create_session",
+        "resume_session",
+        "healthcheck"
+      ]
+    },
+    {
+      "id": "codex",
+      "adapter": "codex",
+      "binary": "codex",
+      "args": [],
+      "enabled": true,
+      "capabilities": [
+        "execute",
+        "stream_events",
+        "cancel",
+        "resume_session",
+        "healthcheck"
+      ]
+    }
   ],
   "environments": [
-    { "id": "claude-code-home", "homeDir": "~/.claude", "directoryMode": "external", "launchArgs": [], "settings": { "permissionMode": "plan", "outputFormat": "stream-json" } },
-    { "id": "codex-home", "homeDir": "~/.codex", "directoryMode": "external", "launchArgs": [], "settings": { "sandbox": "read-only", "skipGitRepoCheck": true } }
+    {
+      "id": "claude-code-home",
+      "directoryMode": "external",
+      "homeDir": "~/.claude",
+      "launchArgs": [],
+      "settings": {
+        "permissionMode": "plan",
+        "outputFormat": "stream-json"
+      }
+    },
+    {
+      "id": "codex-home",
+      "directoryMode": "external",
+      "homeDir": "~/.codex",
+      "launchArgs": [],
+      "settings": {
+        "sandbox": "read-only",
+        "skipGitRepoCheck": true
+      }
+    },
+    {
+      "id": "claude-code-home-managed",
+      "directoryMode": "managed",
+      "launchArgs": [],
+      "settings": {
+        "permissionMode": "plan",
+        "outputFormat": "stream-json"
+      }
+    },
+    {
+      "id": "codex-home-managed",
+      "directoryMode": "managed",
+      "launchArgs": [],
+      "settings": {
+        "sandbox": "read-only",
+        "skipGitRepoCheck": true
+      }
+    }
   ],
   "agents": [
-    { "id": "claude-reviewer", "engineId": "claude-code", "environmentId": "claude-code-home", "permissionId": "readonly-local", "enabled": true, "processEnv": {}, "settings": {} },
-    { "id": "codex-reviewer", "engineId": "codex", "environmentId": "codex-home", "permissionId": "readonly-local", "enabled": true, "processEnv": {}, "settings": {} }
+    {
+      "id": "claude-reviewer",
+      "engineId": "claude-code",
+      "environmentId": "claude-code-home",
+      "permissionId": "readonly-local",
+      "enabled": true,
+      "processEnv": {},
+      "settings": {}
+    },
+    {
+      "id": "codex-reviewer",
+      "engineId": "codex",
+      "environmentId": "codex-home",
+      "permissionId": "readonly-local",
+      "enabled": true,
+      "processEnv": {},
+      "settings": {}
+    },
+    {
+      "id": "new-agent",
+      "engineId": "codex",
+      "environmentId": "codex-home-managed",
+      "permissionId": "readonly-local",
+      "enabled": true,
+      "processEnv": {},
+      "settings": {}
+    }
   ],
   "projects": [
-    { "id": "agentdock", "rootDir": "..", "agentIds": ["claude-reviewer", "codex-reviewer"], "defaultAgentId": "claude-reviewer" }
+    {
+      "id": "agentdock",
+      "rootDir": "..",
+      "agentIds": [
+        "claude-reviewer",
+        "codex-reviewer",
+        "new-agent"
+      ],
+      "defaultAgentId": "claude-reviewer",
+      "environmentIds": []
+    }
+  ],
+  "environmentPermissions": [
+    {
+      "id": "readonly-local",
+      "filesystem": {
+        "roots": [
+          "."
+        ],
+        "write": false
+      },
+      "environment": {
+        "allow": [
+          "PATH",
+          "HOME"
+        ]
+      },
+      "network": "deny"
+    }
   ]
 }

@@ -12,6 +12,7 @@ import { createBuiltinRuntimeRegistry, createConfiguredRuntimeRegistry, RuntimeR
 import { ProcessRunner, type ProcessExecution, type ProcessOutput, type ProcessRequest } from "../src/runtime/process-runner.js";
 import { LocalAdapterStore, localAdapterDirectory } from "../src/runtime/local-adapters.js";
 import { SqliteRunStore } from "../src/storage/sqlite-run-store.js";
+import { EnvironmentDirectoryManager } from "../src/environment/manager.js";
 
 const token = "api-integration-token-1234567890";
 const execFileAsync = promisify(execFile);
@@ -95,6 +96,34 @@ class CancellableAdapter implements AgentAdapter {
   public async cancel(): Promise<void> {}
 }
 
+class MutatingEnvironmentAdapter implements AgentAdapter {
+  public readonly manifest: AdapterManifest = {
+    name: "mutating-environment",
+    version: "0.1.0",
+    entry: "./mutating-environment-adapter.js",
+    agentDockApi: "v1",
+    runtime: { id: "mutating-environment", versionRange: "*" },
+    capabilities: ["execute", "cancel", "healthcheck"],
+    requiredPermissions: [],
+  };
+
+  public constructor(private readonly runtime: RuntimeDescriptor) {}
+
+  public async healthCheck(): Promise<AdapterHealth> {
+    return { healthy: true, runtime: this.runtime };
+  }
+
+  public async *execute(request: AdapterTaskRequest): AsyncIterable<RunEvent> {
+    const configDir = request.environment.AGENTDOCK_CONFIG_DIR;
+    if (!configDir) throw new Error("AGENTDOCK_CONFIG_DIR was not provided.");
+    writeFileSync(join(configDir, "runtime-state.json"), `${Date.now()}\n`);
+    yield { runId: request.runId, sequence: 0, timestamp: new Date().toISOString(), type: "status", payload: { status: "running" } };
+    yield { runId: request.runId, sequence: 1, timestamp: new Date().toISOString(), type: "status", payload: { status: "succeeded" } };
+  }
+
+  public async cancel(): Promise<void> {}
+}
+
 function configFor(engineId: string, adapter: string, capabilities: RuntimeDescriptor["capabilities"] = ["execute", "cancel"]): ReturnType<typeof validateConfig> {
   return validateConfig({
     version: 1,
@@ -117,6 +146,15 @@ async function waitFor(check: () => boolean, timeoutMs = 1_000): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error("Timed out while waiting for the expected API state.");
+}
+
+async function waitForAsync(check: () => Promise<boolean>, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out while waiting for the expected asynchronous API state.");
 }
 
 function isTerminal(status: string | undefined): boolean {
@@ -216,6 +254,39 @@ describe("AgentDock API and Adapter integration", () => {
     }
   });
 
+  it("reconciles Environment changes made during a Run before the next HTTP request", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agentdock-api-environment-reconcile-"));
+    const store = new SqliteRunStore(join(directory, "agentdock.db"));
+    const config = configFor("mutating-environment", "mutating-environment", ["execute", "cancel"]);
+    const registry = new RuntimeRegistry();
+    registry.register("mutating-environment", (runtime) => new MutatingEnvironmentAdapter(runtime));
+    const api = createAgentDockApiServer({ config, configPath: join(directory, "config.json"), store, registry, apiToken: token });
+    try {
+      const address = await api.listen();
+      const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const submit = (): Promise<Response> => fetch(`${baseUrl}/runs`, {
+        method: "POST",
+        headers: authHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ task: "runtime mutation", projectId: "workspace" }),
+      });
+      const first = await submit();
+      expect(first.status).toBe(202);
+      const firstRunId = runIdFromBody(await first.json());
+      await waitFor(() => store.getRun(firstRunId)?.status === "succeeded");
+      const manager = new EnvironmentDirectoryManager(config, directory);
+      await waitForAsync(async () => !(await manager.inspect("default")).drifted);
+
+      const second = await submit();
+      expect(second.status).toBe(202);
+      const secondRunId = runIdFromBody(await second.json());
+      await waitFor(() => store.getRun(secondRunId)?.status === "succeeded");
+    } finally {
+      await api.close();
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("runs the documented local API client example against the Echo Adapter", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentdock-api-client-example-"));
     const store = new SqliteRunStore(join(directory, "agentdock.db"));
@@ -231,6 +302,7 @@ describe("AgentDock API and Adapter integration", () => {
           AGENTDOCK_API_BASE_URL: `http://${address.host}:${address.port}/api/v1`,
           AGENTDOCK_API_TOKEN: token,
           AGENTDOCK_PROJECT_ID: "workspace",
+          AGENTDOCK_AGENT_ID: "default",
         },
       });
       const lines = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -436,7 +508,7 @@ describe("AgentDock API and Adapter integration", () => {
       await execFileAsync(process.execPath, [tsxPath, cliPath, "adapter", "enable", "example-echo", "--config", configPath], { cwd: process.cwd() });
       let result;
       try {
-        result = await execFileAsync(process.execPath, [tsxPath, cliPath, "run", "execute", "--project", "workspace", "--config", configPath, "cli integration"], { cwd: process.cwd(), maxBuffer: 256 * 1024 });
+        result = await execFileAsync(process.execPath, [tsxPath, cliPath, "agent", "run", "default", "--project", "workspace", "--config", configPath, "cli integration"], { cwd: process.cwd(), maxBuffer: 256 * 1024 });
       } catch (error) {
         const details = error as { stderr?: string; stdout?: string };
         throw new Error(`CLI failed. stdout=${details.stdout ?? ""} stderr=${details.stderr ?? ""}`);

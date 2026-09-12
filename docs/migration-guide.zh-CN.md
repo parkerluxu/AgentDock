@@ -4,7 +4,7 @@
 
 ## 从 CLI 调用迁移到 API
 
-CLI 的 `run execute` 参数对应 API 的 `POST /api/v1/runs`：
+CLI 的 `run execute` 参数对应 API 的 `POST /api/v1/runs`；面向固定 Agent 的新调用也可以使用 `POST /api/v1/agents/:agentId/invoke`，一次请求直接消费 SSE。
 
 | CLI | API JSON |
 | --- | --- |
@@ -29,6 +29,10 @@ API 创建成功返回 `202`，随后从 `GET /api/v1/runs/{runId}/events` 读�
 3. 处理 `202`、`200`（幂等重放）、`409`、`429` 和 `413`；错误体统一读取 `error.code` 与 `error.message`。
 4. SSE 消费器只依据 `id` 去重，并在收到终态 `status` 或 `error` 后关闭连接。
 5. 不把 Bearer token 写入任务、日志、导出或错误上报；API 只监听回环地址，token 不代表远程身份认证。
+
+`POST /api/v1/agents/:agentId/invoke` 要求 `Accept: text/event-stream`。它会先发送 `accepted`（含 `runId` 和 `eventsUrl`），再发送标准 Run 事件；Agent 已绑定 Environment，因此请求体不能传 `environmentId`。现有 `POST /api/v1/runs` 保持兼容，适用于需要显式异步 Run 的客户端。
+
+Node 调用方可以使用包入口导出的 `AgentDockClient`，由 SDK 自动完成上述 SSE 消费、断线重连和 sequence 去重；参见[本地 Agent 调用 SDK](./sdk-client.zh-CN.md)。Project 的可调用 Agent 列表和默认 Agent 可通过 `PUT /api/v1/projects/:projectId/agents` 原子更新，并携带当前 `revision/hash`。
 
 ## Adapter SDK v0.1 到 v1 兼容边界
 

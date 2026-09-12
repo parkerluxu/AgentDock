@@ -36,9 +36,10 @@ function createStore(): SqliteRunStore {
 describe("SqliteRunStore", () => {
   it("persists sessions, runs, snapshots and ordered events", () => {
     const store = createStore();
-    store.createSession({ id: "ses-1", projectId: "app", engineId: "codex", resumable: false });
+    store.createSession({ id: "ses-1", projectId: "app", agentId: "reviewer", engineId: "codex", environmentId: "review", resumable: false });
     store.createRun({
       id: "run-1",
+      agentId: "reviewer",
       engineId: "codex",
       environmentId: "review",
       projectId: "app",
@@ -50,8 +51,8 @@ describe("SqliteRunStore", () => {
     store.appendEvent({ runId: "run-1", sequence: 1, timestamp: "2026-08-22T00:00:01.000Z", type: "status", payload: { status: "succeeded", exitCode: 0 } });
     store.updateRun("run-1", { status: "succeeded", exitCode: 0, finishedAt: "2026-08-22T00:00:01.000Z" });
 
-    expect(store.getSession("ses-1")?.engineId).toBe("codex");
-    expect(store.getRun("run-1")).toMatchObject({ id: "run-1", status: "succeeded", snapshot: { environmentPermission: { network: "deny" } } });
+    expect(store.getSession("ses-1")).toMatchObject({ agentId: "reviewer", engineId: "codex", environmentId: "review" });
+    expect(store.getRun("run-1")).toMatchObject({ id: "run-1", agentId: "reviewer", status: "succeeded", snapshot: { environmentPermission: { network: "deny" } } });
     expect(store.listEvents("run-1").map((event) => event.sequence)).toEqual([0, 1]);
   });
 

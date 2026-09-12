@@ -6,7 +6,9 @@ import type { Run, RunEvent, RunStatus, Session } from "../core/types.js";
 interface SessionRow {
   id: string;
   project_id: string | null;
+  agent_id: string | null;
   runtime_id: string;
+  environment_id: string | null;
   runtime_session_id: string | null;
   resumable: number;
   status: Session["status"];
@@ -16,6 +18,7 @@ interface SessionRow {
 
 interface RunRow {
   id: string;
+  agent_id: string | null;
   runtime_id: string;
   profile_id: string;
   project_id: string | null;
@@ -63,7 +66,9 @@ export type IdempotencyReservation =
 export interface CreateSessionInput {
   id: string;
   projectId?: string;
+  agentId?: string;
   engineId: string;
+  environmentId?: string;
   runtimeSessionId?: string;
   resumable: boolean;
   createdAt?: string;
@@ -86,7 +91,7 @@ export class SqliteRunStore {
   private readonly database: DatabaseSync;
   private readonly runById: StatementSync;
   private readonly eventByRun: StatementSync;
-  private readonly saveOutput: boolean;
+  private saveOutput: boolean;
 
   public constructor(databasePath: string, options: SqliteRunStoreOptions = {}) {
     const absolutePath = resolve(databasePath);
@@ -112,16 +117,26 @@ export class SqliteRunStore {
     this.database.close();
   }
 
+  public updateStorageOptions(options: SqliteRunStoreOptions): void {
+    if (options.retentionDays !== undefined && (!Number.isInteger(options.retentionDays) || options.retentionDays < 1)) {
+      throw new Error("The SQLite retentionDays option must be a positive integer.");
+    }
+    if (options.saveOutput !== undefined) this.saveOutput = options.saveOutput;
+    if (options.retentionDays !== undefined) this.pruneExpired(options.retentionDays);
+  }
+
   public createSession(input: CreateSessionInput): Session {
     const now = input.createdAt ?? new Date().toISOString();
     this.database.prepare(`
-      INSERT INTO sessions (id, project_id, runtime_id, runtime_session_id, resumable, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
-    `).run(input.id, input.projectId ?? null, input.engineId, input.runtimeSessionId ?? null, input.resumable ? 1 : 0, now, now);
+      INSERT INTO sessions (id, project_id, agent_id, runtime_id, environment_id, runtime_session_id, resumable, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    `).run(input.id, input.projectId ?? null, input.agentId ?? null, input.engineId, input.environmentId ?? null, input.runtimeSessionId ?? null, input.resumable ? 1 : 0, now, now);
     return {
       id: input.id,
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      ...(input.agentId ? { agentId: input.agentId } : {}),
       engineId: input.engineId,
+      ...(input.environmentId ? { environmentId: input.environmentId } : {}),
       ...(input.runtimeSessionId ? { runtimeSessionId: input.runtimeSessionId } : {}),
       resumable: input.resumable,
       status: "active",
@@ -152,9 +167,9 @@ export class SqliteRunStore {
   public createRun(input: CreateRunInput): Run {
     const createdAt = input.createdAt ?? new Date().toISOString();
     this.database.prepare(`
-      INSERT INTO runs (id, runtime_id, profile_id, project_id, session_id, task, status, snapshot_json, created_at, owner_pid, started_at, finished_at, exit_code, error_code)
-      VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL)
-    `).run(input.id, input.engineId, input.environmentId, input.projectId ?? null, input.sessionId ?? null, input.task, JSON.stringify(input.snapshot), createdAt, input.ownerPid ?? null);
+      INSERT INTO runs (id, agent_id, runtime_id, profile_id, project_id, session_id, task, status, snapshot_json, created_at, owner_pid, started_at, finished_at, exit_code, error_code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, NULL, NULL, NULL, NULL)
+    `).run(input.id, input.agentId ?? null, input.engineId, input.environmentId, input.projectId ?? null, input.sessionId ?? null, input.task, JSON.stringify(input.snapshot), createdAt, input.ownerPid ?? null);
     return {
       id: input.id,
       ...(input.agentId ? { agentId: input.agentId } : {}),
@@ -379,6 +394,15 @@ export class SqliteRunStore {
     }
     const idempotencyMigration = this.database.prepare("SELECT version FROM schema_migrations WHERE version = 3").get();
     if (!idempotencyMigration) this.database.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?)").run(new Date().toISOString());
+    const identityMigration = this.database.prepare("SELECT version FROM schema_migrations WHERE version = 4").get();
+    if (!identityMigration) {
+      const sessionColumns = this.database.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>;
+      if (!sessionColumns.some((column) => column.name === "agent_id")) this.database.exec("ALTER TABLE sessions ADD COLUMN agent_id TEXT");
+      if (!sessionColumns.some((column) => column.name === "environment_id")) this.database.exec("ALTER TABLE sessions ADD COLUMN environment_id TEXT");
+      const runColumns = this.database.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
+      if (!runColumns.some((column) => column.name === "agent_id")) this.database.exec("ALTER TABLE runs ADD COLUMN agent_id TEXT");
+      this.database.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (4, ?)").run(new Date().toISOString());
+    }
   }
 }
 
@@ -386,7 +410,9 @@ function sessionFromRow(row: SessionRow): Session {
   return {
     id: row.id,
     ...(row.project_id ? { projectId: row.project_id } : {}),
+    ...(row.agent_id ? { agentId: row.agent_id } : {}),
     engineId: row.runtime_id,
+    ...(row.environment_id ? { environmentId: row.environment_id } : {}),
     ...(row.runtime_session_id ? { runtimeSessionId: row.runtime_session_id } : {}),
     resumable: row.resumable === 1,
     status: row.status,
@@ -407,6 +433,7 @@ function processIsRunning(pid: number): boolean {
 function runFromRow(row: RunRow): Run {
   return {
     id: row.id,
+    ...(row.agent_id ? { agentId: row.agent_id } : {}),
     engineId: row.runtime_id,
     environmentId: row.profile_id,
     ...(row.project_id ? { projectId: row.project_id } : {}),

@@ -67,6 +67,8 @@ describe("EnvironmentDirectoryManager", () => {
       const clean = await f.manager.inspect("managed");
       expect(clean.healthy).toBe(true);
       expect(clean.drifted).toBe(false);
+      writeFileSync(join(manifest.configDir, "models_cache.json"), "runtime-cache\n");
+      expect((await f.manager.inspect("managed")).drifted).toBe(false);
       writeFileSync(join(manifest.configDir, "settings.json"), "{}\n");
       const drifted = await f.manager.inspect("managed");
       expect(drifted.drifted).toBe(true);
@@ -115,15 +117,18 @@ describe("EnvironmentDirectoryManager", () => {
     try {
       const source = await f.manager.rescan("managed");
       writeFileSync(join(source.configDir, "agent.json"), "source\n");
+      writeFileSync(join(source.configDir, "auth.json"), "token=must-not-copy\n");
       writeFileSync(join(source.stateDir, "session.json"), "state\n");
       writeFileSync(join(source.cacheDir, "index"), "cache\n");
       await f.manager.rescan("managed");
       await f.manager.copyConfig("managed", "managed-copy");
       const target = resolveEnvironmentDirectories(f.config, f.baseDirectory, f.config.environments[1]!);
       expect(readFileSync(join(target.configDir, "agent.json"), "utf8")).toBe("source\n");
+      expect(existsSync(join(target.configDir, "auth.json"))).toBe(false);
       expect(existsSync(join(target.stateDir, "session.json"))).toBe(false);
       expect(existsSync(join(target.cacheDir, "index"))).toBe(false);
       const backup = await f.manager.backup("managed");
+      expect(existsSync(join(backup.path, "config", "auth.json"))).toBe(false);
       writeFileSync(join(source.configDir, "agent.json"), "changed\n");
       await f.manager.rescan("managed");
       await f.manager.restore("managed", backup.id);

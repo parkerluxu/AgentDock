@@ -58,4 +58,18 @@ describe("ProcessRunner", () => {
     expect(result.exit.code).toBe(7);
     expect(result.exit.timedOut).toBeUndefined();
   });
+
+  it.skipIf(process.platform !== "win32")("preserves quoted arguments when launching a Windows .cmd shim", async () => {
+    const runner = new ProcessRunner();
+    const execution = runner.execute({
+      command: "npm",
+      args: ["exec", "--yes", "--", "node", "-e", "console.log(process.argv[1])", "hello world"],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "" },
+      timeoutMs: 15_000,
+    });
+    const result = await collectProcessOutput(execution);
+    expect(result.exit.code).toBe(0);
+    expect(result.stdout.trim()).toBe("hello world");
+  });
 });

@@ -32,6 +32,14 @@ export const openApiDocument = {
         responses: { "200": { description: "Configured projects", content: { "application/json": { schema: { type: "object", required: ["projects"], properties: { projects: { type: "array", items: { $ref: "#/components/schemas/Project" } } } } } } } },
       },
     },
+    "/projects/{projectId}/agents": {
+      parameters: [{ $ref: "#/components/parameters/ProjectPathId" }],
+      put: {
+        operationId: "bindProjectAgents",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ProjectAgentBindingRequest" } } } },
+        responses: { "200": { description: "Project Agent bindings updated" }, ...errorResponses("400", "401", "404", "409", "413", "415", "422") },
+      },
+    },
     "/engines": {
       get: {
         operationId: "listEngines",
@@ -42,6 +50,29 @@ export const openApiDocument = {
       get: {
         operationId: "listAgents",
         responses: { "200": { description: "Configured externally callable Agents", content: { "application/json": { schema: { type: "object", required: ["agents"], properties: { agents: { type: "array", items: { $ref: "#/components/schemas/Agent" } } } } } } } },
+      },
+      post: {
+        operationId: "createAgent",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/AgentMutationRequest" } } } },
+        responses: { "201": { description: "Agent registered and configuration hot-reloaded when safe" }, ...errorResponses("400", "401", "409", "413", "415", "422") },
+      },
+    },
+    "/agents/{agentId}": {
+      parameters: [{ $ref: "#/components/parameters/AgentId" }],
+      get: { operationId: "getAgent", responses: { "200": { description: "Configured Agent" }, ...errorResponses("401", "404") } },
+      put: { operationId: "updateAgent", requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/AgentMutationRequest" } } } }, responses: { "200": { description: "Agent updated" }, ...errorResponses("400", "401", "409", "413", "415", "422") } },
+      delete: { operationId: "deleteAgent", requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["revision", "hash"], properties: { revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } } } } }, responses: { "200": { description: "Agent removed from configuration" }, ...errorResponses("400", "401", "409", "413", "415", "422") } },
+    },
+    "/agents/{agentId}/invoke": {
+      parameters: [{ $ref: "#/components/parameters/AgentId" }],
+      post: {
+        operationId: "invokeAgentStream",
+        parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/InvokeAgentRequest" } } } },
+        responses: {
+          "200": { description: "Agent invocation event stream. The first accepted event contains the Run id and replay URL.", content: { "text/event-stream": { schema: { type: "string", description: "accepted event followed by sequenced Run events." } } } },
+          ...errorResponses("400", "401", "406", "409", "413", "415", "429"),
+        },
       },
     },
     "/environments": {
@@ -93,7 +124,7 @@ export const openApiDocument = {
       put: {
         operationId: "saveConfig",
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/SaveConfigRequest" } } } },
-        responses: { "200": { description: "Configuration saved atomically; restart is required", content: { "application/json": { schema: { $ref: "#/components/schemas/ConfigSaveResponse" } } } }, ...errorResponses("400", "401", "409", "413", "415", "422") },
+        responses: { "200": { description: "Configuration saved atomically and hot-reloaded when safe", content: { "application/json": { schema: { $ref: "#/components/schemas/ConfigSaveResponse" } } } }, ...errorResponses("400", "401", "409", "413", "415", "422") },
       },
     },
     "/config/preview": {
@@ -113,7 +144,7 @@ export const openApiDocument = {
       post: {
         operationId: "restoreConfigBackup",
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/RestoreConfigRequest" } } } },
-        responses: { "200": { description: "Configuration restored atomically; restart is required", content: { "application/json": { schema: { $ref: "#/components/schemas/ConfigSaveResponse" } } } }, ...errorResponses("400", "401", "404", "409", "413", "415", "422") },
+        responses: { "200": { description: "Configuration restored atomically and hot-reloaded when safe", content: { "application/json": { schema: { $ref: "#/components/schemas/ConfigSaveResponse" } } } }, ...errorResponses("400", "401", "404", "409", "413", "415", "422") },
       },
     },
     "/runs": {
@@ -173,26 +204,30 @@ export const openApiDocument = {
     securitySchemes: { bearerAuth: { type: "http", scheme: "bearer" } },
     parameters: {
       RunId: { name: "runId", in: "path", required: true, schema: { type: "string" } },
+      AgentId: { name: "agentId", in: "path", required: true, schema: { type: "string" } },
       EnvironmentId: { name: "environmentId", in: "path", required: true, schema: { type: "string" } },
       RunStatus: { name: "status", in: "query", schema: { $ref: "#/components/schemas/RunStatus" } },
       ProjectId: { name: "projectId", in: "query", schema: { type: "string" } },
+      ProjectPathId: { name: "projectId", in: "path", required: true, schema: { type: "string" } },
       Limit: { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 1000 } },
       After: { name: "after", in: "query", schema: { type: "integer", minimum: -1 } },
       Stream: { name: "stream", in: "query", schema: { type: "string", enum: ["sse"] } },
       IdempotencyKey: { name: "Idempotency-Key", in: "header", schema: { type: "string", minLength: 1, maxLength: 128 } },
     },
     schemas: {
-      HealthResponse: { type: "object", required: ["healthy", "apiVersion"], properties: { healthy: { type: "boolean" }, apiVersion: { type: "string", enum: ["v1"] } } },
+      HealthResponse: { type: "object", required: ["healthy", "apiVersion"], properties: { healthy: { type: "boolean" }, apiVersion: { type: "string", enum: ["v1"] }, configRevision: { type: "string" } } },
       Runtime: { type: "object", required: ["id", "adapter", "args", "enabled", "capabilities"], properties: { id: { type: "string" }, adapter: { type: "string" }, binary: { type: "string" }, args: { type: "array", items: { type: "string" } }, version: { type: "string" }, enabled: { type: "boolean" }, capabilities: { type: "array", items: { type: "string" } } } },
       AgentEngine: { $ref: "#/components/schemas/Runtime" },
       EnvironmentPermission: { type: "object", required: ["id", "filesystem", "environment", "network"], properties: { id: { type: "string" }, filesystem: { type: "object" }, environment: { type: "object" }, network: { type: "string", enum: ["deny", "allow"] } } },
       Agent: { type: "object", required: ["id", "engineId", "environmentId", "permissionId", "enabled", "processEnv", "settings"], properties: { id: { type: "string" }, engineId: { type: "string" }, environmentId: { type: "string" }, permissionId: { type: "string" }, enabled: { type: "boolean" }, processEnv: { type: "object", additionalProperties: { type: "string" } }, settings: { type: "object" } } },
+      AgentMutationRequest: { type: "object", required: ["agent", "revision", "hash"], properties: { agent: { $ref: "#/components/schemas/Agent" }, revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } },
       AgentEnvironment: { type: "object", required: ["id", "directoryMode", "launchArgs", "settings"], properties: { id: { type: "string" }, engineId: { type: "string" }, permissionId: { type: "string" }, extends: { type: "string" }, directoryMode: { type: "string", enum: ["managed", "external"] }, homeDir: { type: "string" }, configDir: { type: "string" }, stateDir: { type: "string" }, cacheDir: { type: "string" }, launchArgs: { type: "array", items: { type: "string" } }, settings: { type: "object" } } },
       EnvironmentManifest: { type: "object", required: ["manifestVersion", "environmentId", "directoryMode", "configDir", "stateDir", "cacheDir", "configHash", "scannedAt"], properties: { manifestVersion: { type: "integer", enum: [1] }, environmentId: { type: "string" }, engineId: { type: "string" }, directoryMode: { type: "string", enum: ["managed", "external"] }, homeDir: { type: "string" }, configDir: { type: "string" }, stateDir: { type: "string" }, cacheDir: { type: "string" }, configHash: { type: "string" }, scannedAt: { type: "string", format: "date-time" } } },
       EnvironmentStatus: { type: "object", required: ["environment", "drifted", "healthy", "issues"], properties: { environment: { $ref: "#/components/schemas/AgentEnvironment" }, manifest: { $ref: "#/components/schemas/EnvironmentManifest" }, currentHash: { type: "string" }, drifted: { type: "boolean" }, healthy: { type: "boolean" }, issues: { type: "array", items: { type: "string" } } } },
       EnvironmentMutationRequest: { type: "object", required: ["environment", "revision", "hash"], properties: { environment: { $ref: "#/components/schemas/AgentEnvironment" }, revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } },
-      Session: { type: "object", required: ["id", "engineId", "resumable", "status", "createdAt", "updatedAt"], properties: { id: { type: "string" }, projectId: { type: "string" }, engineId: { type: "string" }, runtimeSessionId: { type: "string" }, resumable: { type: "boolean" }, status: { type: "string", enum: ["active", "archived"] }, createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" } } },
+      Session: { type: "object", required: ["id", "engineId", "resumable", "status", "createdAt", "updatedAt"], properties: { id: { type: "string" }, projectId: { type: "string" }, agentId: { type: "string" }, engineId: { type: "string" }, environmentId: { type: "string" }, runtimeSessionId: { type: "string" }, resumable: { type: "boolean" }, status: { type: "string", enum: ["active", "archived"] }, createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" } } },
       Project: { type: "object", required: ["id", "rootDir", "agentIds"], properties: { id: { type: "string" }, rootDir: { type: "string" }, agentIds: { type: "array", items: { type: "string" } }, defaultAgentId: { type: "string" }, environmentIds: { type: "array", items: { type: "string" } }, defaultEnvironmentId: { type: "string" } } },
+      ProjectAgentBindingRequest: { type: "object", required: ["agentIds", "revision", "hash"], properties: { agentIds: { type: "array", items: { type: "string" } }, defaultAgentId: { type: "string" }, revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } },
       ConfigSnapshot: { type: "object", required: ["config", "revision", "hash"], properties: { config: { type: "object" }, revision: { type: "string" }, hash: { type: "string" } } },
       ConfigDiffEntry: { type: "object", required: ["path", "before", "after"], properties: { path: { type: "string" }, before: {}, after: {} } },
       ConfigRisk: { type: "object", required: ["required", "reasons"], properties: { required: { type: "boolean" }, reasons: { type: "array", items: { type: "string" } } } },
@@ -202,11 +237,12 @@ export const openApiDocument = {
       RestoreConfigRequest: { type: "object", required: ["backupId", "revision", "hash"], properties: { backupId: { type: "string" }, revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } },
       DryRunRequest: { type: "object", required: ["task"], properties: { task: { type: "string", minLength: 1 }, agentId: { type: "string" }, environmentId: { type: "string" }, projectId: { type: "string" } } },
       ConfigBackup: { type: "object", required: ["id", "createdAt", "size"], properties: { id: { type: "string" }, createdAt: { type: "string", format: "date-time" }, size: { type: "integer" } } },
-      ConfigSaveResponse: { allOf: [{ $ref: "#/components/schemas/ConfigSnapshot" }, { type: "object", required: ["diff", "highRisk", "backupId", "auditId", "restartRequired"], properties: { diff: { type: "array", items: { $ref: "#/components/schemas/ConfigDiffEntry" } }, highRisk: { $ref: "#/components/schemas/ConfigRisk" }, backupId: { type: "string" }, auditId: { type: "string" }, restartRequired: { type: "boolean" } } }] },
+      ConfigSaveResponse: { allOf: [{ $ref: "#/components/schemas/ConfigSnapshot" }, { type: "object", required: ["diff", "highRisk", "backupId", "auditId", "restartRequired"], properties: { diff: { type: "array", items: { $ref: "#/components/schemas/ConfigDiffEntry" } }, highRisk: { $ref: "#/components/schemas/ConfigRisk" }, backupId: { type: "string" }, auditId: { type: "string" }, restartRequired: { type: "boolean" }, restartReasons: { type: "array", items: { type: "string" } } } }] },
       RunStatus: { type: "string", enum: ["queued", "running", "succeeded", "failed", "cancelled", "timed_out"] },
       Run: { type: "object", required: ["id", "engineId", "environmentId", "task", "status", "snapshot", "createdAt"], properties: { id: { type: "string" }, engineId: { type: "string" }, environmentId: { type: "string" }, projectId: { type: "string" }, sessionId: { type: "string" }, task: { type: "string" }, status: { $ref: "#/components/schemas/RunStatus" }, snapshot: { type: "object" }, createdAt: { type: "string", format: "date-time" }, ownerPid: { type: "integer" }, startedAt: { type: "string", format: "date-time" }, finishedAt: { type: "string", format: "date-time" }, exitCode: { type: "integer" }, errorCode: { type: "string" } } },
       RunEvent: { type: "object", required: ["runId", "sequence", "timestamp", "type", "payload"], properties: { runId: { type: "string" }, sequence: { type: "integer", minimum: 0 }, timestamp: { type: "string", format: "date-time" }, type: { type: "string", enum: ["status", "message", "tool_call", "tool_result", "error"] }, payload: { type: "object" } } },
       CreateRunRequest: { type: "object", required: ["task"], properties: { task: { type: "string", minLength: 1 }, agentId: { type: "string" }, environmentId: { type: "string" }, projectId: { type: "string" }, sessionId: { type: "string" }, idempotencyKey: { type: "string", minLength: 1, maxLength: 128 }, requiredCapabilities: { type: "array", items: { type: "string" } }, network: { type: "string", enum: ["deny", "allow"] }, filesystemWrite: { type: "boolean" } } },
+      InvokeAgentRequest: { type: "object", required: ["task"], properties: { task: { type: "string", minLength: 1 }, projectId: { type: "string" }, sessionId: { type: "string" }, idempotencyKey: { type: "string", minLength: 1, maxLength: 128 }, requiredCapabilities: { type: "array", items: { type: "string" } }, network: { type: "string", enum: ["deny", "allow"] }, filesystemWrite: { type: "boolean" } } },
       CreateRunResponse: { type: "object", required: ["run", "created", "eventsUrl"], properties: { run: { $ref: "#/components/schemas/Run" }, created: { type: "boolean" }, eventsUrl: { type: "string" } } },
       CancelResponse: { type: "object", required: ["runId", "cancellationRequested"], properties: { runId: { type: "string" }, cancellationRequested: { type: "boolean" } } },
       ErrorResponse: { type: "object", required: ["error"], properties: { error: { type: "object", required: ["code", "message"], properties: { code: { type: "string" }, message: { type: "string" }, details: { type: "object" } } } } },

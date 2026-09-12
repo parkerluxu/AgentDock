@@ -67,7 +67,7 @@ Environment 权限（内部仍由 Policy 类型执行）当前强制目录根、
 
 访问 API 根路径的 Control Center 后，进入唯一的“配置中心”入口，可以在同一处切换编辑 Agent、Agent Engine、Agent Environment、Project 和 Environment Permission。建议按 Agent → Engine → Environment → Project 的顺序配置：Project 表单会直接列出 Agent 并支持勾选，不需要手写 ID；默认 Agent 只能从已勾选项中选择。常用字段提供表单；高级 JSON 只编辑当前选中的对象，保存时合并回配置。保存前调用同源配置 API 展示 schema/跨对象/权限校验、`dry-run`、风险说明和字段差异。
 
-配置快照带有 `revision/hash`。服务保存前会重新读取磁盘配置，revision 不匹配时拒绝覆盖。写入采用同目录临时文件和原子替换，原文件保存为备份；审计事件追加写入 `config-audit.jsonl`。备份页可恢复任一可用备份，失败的审计写入会尝试回滚配置。第一版保存或恢复后都提示重启 API 服务，不承诺热加载。
+配置快照带有 `revision/hash`。服务保存前会重新读取磁盘配置，revision 不匹配时拒绝覆盖。写入采用同目录临时文件和原子替换，原文件保存为备份；审计事件追加写入 `config-audit.jsonl`。备份页可恢复任一可用备份，失败的审计写入会尝试回滚配置。安全配置保存或恢复后会自动热加载；`dataDir` 变化或运行时组件无法切换时会提示重启 API。
 
 Web 看板只允许使用 `environment.secretRefs` 编辑 Secret Reference，不允许读取、回显或保存明文 secret。开启文件写入、网络、shell/command 或新增/变更 Secret Reference 等高风险配置需要二次确认。配置变更不会改写历史 Run snapshot。
 
