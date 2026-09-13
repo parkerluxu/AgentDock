@@ -34,4 +34,27 @@ node dist/cli.js run list --config examples/config.example.json --status succeed
 node dist/cli.js run export --format jsonl --config examples/config.example.json <run-id>
 ```
 
+## Run from any PowerShell directory
+
+The current PowerShell directory does not need to be the AgentDock source tree. After building, use absolute paths for the CLI entrypoint and configuration file:
+
+```powershell
+$repo = "D:\AI_agent\cases\AgentDock"
+$config = "$repo\examples\config.example.json"
+node "$repo\dist\cli.js" agent run new-agent --config $config --project other-project hello
+```
+
+`other-project` must already exist in the configuration. Its `rootDir` points to the target working directory and its `agentIds` must include `new-agent`. Changing directories with `cd` does not override the Project `rootDir`; the CLI currently has no per-call `--cwd` option. Relative paths in the configuration still resolve from the configuration file directory.
+
+For a global `agentdock` command, run `npm link` once from the source tree, then continue to pass an absolute `--config` path when working elsewhere:
+
+```powershell
+Push-Location "D:\AI_agent\cases\AgentDock"
+npm link
+Pop-Location
+agentdock agent run new-agent --config "D:\AI_agent\cases\AgentDock\examples\config.example.json" --project other-project hello
+```
+
+See [Use the CLI and SDK from any PowerShell directory](./sdk) for SDK, ESM, and Node.js module details.
+
 Exit codes are `0` for success, `2` for input/configuration errors, `3` for failed or timed-out Runs, and `130` for Ctrl+C cancellation.

@@ -28,7 +28,9 @@ AgentDock 是一个 local-first 的 AI Agent 控制面：它发现并管理多�
 | 入门 | [快速开始](./getting-started)、[构建与部署](./build-and-deploy) |
 | 概念 | [架构与核心概念](./architecture)、[配置模型](./configuration) |
 | 使用 | [CLI](./cli)、[典型工作流](./workflows) |
-| 集成 | [本地 API](./api)、[本地调用 SDK](https://github.com/parkerluxu/AgentDock/blob/main/docs/sdk-client.zh-CN.md)、[Adapter SDK](./adapters) |
+| 集成 | [本地 API](./api)、[本地调用 SDK](./sdk)、[Adapter SDK](./adapters) |
 | 运维 | [Environment](./environments)、[安全边界](./security)、[故障排查](./troubleshooting) |
+
+如果 PowerShell 当前目录不在源码目录，请先阅读[任意目录调用 CLI 与 SDK](./sdk)，其中说明绝对路径、Project `rootDir`、`npm link` 以及 ESM Node.js SDK 的使用方式。
 
 更细的字段和兼容性说明仍保留在仓库的 [配置参考](https://github.com/parkerluxu/AgentDock/blob/main/docs/configuration-reference.zh-CN.md)、[API 参考](https://github.com/parkerluxu/AgentDock/blob/main/docs/api-reference.zh-CN.md)、[Adapter SDK](https://github.com/parkerluxu/AgentDock/blob/main/docs/adapter-sdk.zh-CN.md) 和 [迁移指南](https://github.com/parkerluxu/AgentDock/blob/main/docs/migration-guide.zh-CN.md)。

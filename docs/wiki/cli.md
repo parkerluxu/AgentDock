@@ -34,4 +34,27 @@ node dist/cli.js run list --config examples/config.example.json --status succeed
 node dist/cli.js run export --format jsonl --config examples/config.example.json <run-id>
 ```
 
+## 从任意 PowerShell 目录运行
+
+PowerShell 当前目录不需要是 AgentDock 源码目录。构建完成后，可以用 CLI 入口和配置文件的绝对路径：
+
+```powershell
+$repo = "D:\AI_agent\cases\AgentDock"
+$config = "$repo\examples\config.example.json"
+node "$repo\dist\cli.js" agent run new-agent --config $config --project other-project hello
+```
+
+这里的 `other-project` 必须是配置中已存在的 Project，并且它的 `rootDir` 指向目标工作目录、`agentIds` 包含 `new-agent`。`cd` 到目标目录不会覆盖 Project 的 `rootDir`；CLI 当前也没有单次调用级别的 `--cwd` 参数。配置文件中的相对路径仍以配置文件所在目录为基准。
+
+如果希望在任意目录直接输入 `agentdock`，可以在源码目录执行一次 `npm link`，之后仍建议传入绝对 `--config`：
+
+```powershell
+Push-Location "D:\AI_agent\cases\AgentDock"
+npm link
+Pop-Location
+agentdock agent run new-agent --config "D:\AI_agent\cases\AgentDock\examples\config.example.json" --project other-project hello
+```
+
+SDK 的任意目录调用、ESM 和 Node.js 模块说明见[任意目录调用 CLI 与 SDK](./sdk)。
+
 退出码：`0` 表示成功，`2` 表示输入或配置错误，`3` 表示 Run 失败或超时，`130` 表示通过 Ctrl+C 取消。

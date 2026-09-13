@@ -9,6 +9,7 @@ const zhTheme = {
     { text: "构建与部署", link: "/build-and-deploy" },
     { text: "CLI", link: "/cli" },
     { text: "API", link: "/api" },
+    { text: "SDK", link: "/sdk" },
   ],
   sidebar: [
     { text: "概览", items: [{ text: "Wiki 首页", link: "/" }, { text: "架构与核心概念", link: "/architecture" }] },
@@ -18,6 +19,7 @@ const zhTheme = {
         { text: "快速开始", link: "/getting-started" },
         { text: "配置模型", link: "/configuration" },
         { text: "CLI 使用手册", link: "/cli" },
+        { text: "任意目录调用 CLI 与 SDK", link: "/sdk" },
         { text: "典型工作流", link: "/workflows" },
         { text: "通俗案例：审查一次仓库", link: "/case-study" },
         { text: "Control Center UI 用法", link: "/ui-guide" },
@@ -52,6 +54,7 @@ const enTheme = {
     { text: "Build & deploy", link: "/en/build-and-deploy" },
     { text: "CLI", link: "/en/cli" },
     { text: "API", link: "/en/api" },
+    { text: "SDK", link: "/en/sdk" },
   ],
   sidebar: [
     { text: "Overview", items: [{ text: "Wiki home", link: "/en/" }, { text: "Architecture & concepts", link: "/en/architecture" }] },
@@ -61,6 +64,7 @@ const enTheme = {
         { text: "Getting started", link: "/en/getting-started" },
         { text: "Configuration", link: "/en/configuration" },
         { text: "CLI reference", link: "/en/cli" },
+        { text: "CLI & SDK from any directory", link: "/en/sdk" },
         { text: "Workflows", link: "/en/workflows" },
         { text: "Plain-language case study", link: "/en/case-study" },
         { text: "Control Center UI guide", link: "/en/ui-guide" },

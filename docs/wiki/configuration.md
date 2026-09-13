@@ -78,6 +78,31 @@
 - `dataDir` 默认是 `.agentdock/data`，数据库文件为 `<dataDir>/agentdock.db`。
 - 旧版本曾把 `dataDir` 当作数据库文件；如果该路径已经是文件，AgentDock 会继续读取它。
 
+## 从任意 PowerShell 目录使用
+
+PowerShell 当前目录只是启动命令的位置，不会自动成为 Agent 的工作目录。CLI 的实际工作目录由 Project 的 `rootDir` 决定；Agent 的 `homeDir` / `configDir` 则属于 Environment，用于保存原生配置、状态和缓存，两者不是同一个路径。
+
+例如，要让 `new-agent` 在另一个目录执行，增加一个 Project：
+
+```json
+{
+  "id": "other-project",
+  "rootDir": "D:/work/other-project",
+  "agentIds": ["new-agent"],
+  "defaultAgentId": "new-agent"
+}
+```
+
+从源码目录外运行时，使用 CLI 和配置文件的绝对路径：
+
+```powershell
+$repo = "D:\AI_agent\cases\AgentDock"
+$config = "$repo\examples\config.example.json"
+node "$repo\dist\cli.js" agent run new-agent --config $config --project other-project hello
+```
+
+CLI 当前没有单次调用级别的 `--cwd` 参数；SDK 也没有 `workingDirectory` 参数。需要切换工作目录时，应通过不同 Project 的 `rootDir` 路由。更多示例见[任意目录调用 CLI 与 SDK](./sdk)。
+
 ## 校验与修改
 
 ```text

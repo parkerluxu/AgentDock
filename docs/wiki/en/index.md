@@ -18,6 +18,8 @@ A good reading path is:
 - A zero-dependency Node client SDK for one-call Agent invocation with SSE reconnect and deduplication.
 - SQLite persistence for Runs, Sessions, events, and idempotency keys.
 
+If your PowerShell directory is outside the source tree, see [Use the CLI and SDK from any PowerShell directory](./sdk) for absolute paths, Project `rootDir`, `npm link`, and ESM Node.js SDK usage.
+
 ## Version and boundaries
 
 The current version is `0.1.0-dev` and requires Node.js `>=22.5`. Adapter permissions are declarations and lifecycle checks, not OS or container sandboxing. The API listens only on `127.0.0.1` / `::1` and is intended for same-machine integrations.
