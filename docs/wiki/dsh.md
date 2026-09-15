@@ -34,7 +34,7 @@ npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-0.1.0-dev.
 npx @deepseek-ai/dsh web
 ```
 
-插件会在 DSH 当前目录下使用 `.agentdock/dsh-session-bindings.json` 保存 DSH → AgentDock session 映射。可在 profile 的 Cordis 配置覆盖 `apiBaseUrl`、`apiTokenEnv`、`bindingStorePath` 和 `defaultAgentId`；仓库根目录 `docs/dsh-plugin.zh-CN.md` 提供完整字段说明。
+插件会在 DSH 当前目录下使用 `.agentdock/dsh-session-bindings.json` 保存 DSH → AgentDock session 映射。`apiBaseUrl`、`apiTokenEnv`、`bindingStorePath` 和 `defaultAgentId` 是插件启动参数，必须在 profile 的 `cordis.patch.yml` 修改，而不是 DSH GUI。该文件按 id 替换整个 config，因此覆盖时必须重述所有字段。Settings → AgentDock 编辑的是 `configPath` 指向的 AgentDock 业务配置。
 
 ## 额外能力
 

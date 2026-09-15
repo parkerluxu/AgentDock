@@ -236,7 +236,7 @@ function AgentDockSettings(props: ManagerProps): ReactNode {
   return React.createElement("section", { className: "ad-dsh", "data-testid": "agentdock-settings" },
     React.createElement("header", { className: "ad-dsh-header" },
       React.createElement("div", null, React.createElement("h2", null, "AgentDock control plane"),
-        React.createElement("p", null, "Manage local multi-agent routes from DeepSeek Harness. Secrets stay as references; writes are validated, backed up, and atomic.")),
+        React.createElement("p", null, "Manage AgentDock agents, engines, environments, projects, and permissions. Plugin connection settings such as API URL and token environment variable are configured in the DSH profile's cordis.patch.yml.")),
       React.createElement("button", { type: "button", onClick: () => void load(), disabled: busy }, "↻ Refresh")),
     React.createElement("p", { className: "ad-dsh-path" }, "Config: ", React.createElement("code", null, snapshot.configPath)),
     notice && React.createElement("div", { className: `ad-dsh-notice ${notice.kind}`, role: notice.kind === "error" ? "alert" : "status" }, notice.text),

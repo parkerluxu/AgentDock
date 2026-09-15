@@ -51,13 +51,13 @@ npx @deepseek-ai/dsh web
 - AgentDock 配置：`.agentdock/config.json`
 - DSH → AgentDock 会话绑定：`.agentdock/dsh-session-bindings.json`
 
-可在 DSH profile 的 Cordis 配置覆盖这些值：
+插件自身的启动配置不通过 DSH GUI 保存；请在 DSH profile 的 `cordis.patch.yml` 覆盖。DSH 会按 `id` 替换整个 `config`，所以必须完整保留下面四个字段。以 Web profile 为例，文件通常位于 `C:/Users/<用户名>/.dsh/profiles/web/cordis.patch.yml`：
 
 ```yaml
 - id: agentdock-dsh
   name: 'agentdock/dsh'
   config:
-    configPath: 'D:/AI_agent/configs/production.json'
+    configPath: 'D:/AI_agent/configs/production.json' # AgentDock 的业务配置，GUI 会编辑它
     apiBaseUrl: 'http://127.0.0.1:4177'
     apiTokenEnv: 'AGENTDOCK_API_TOKEN'
     bindingStorePath: '.agentdock/dsh-session-bindings.json'
@@ -67,7 +67,7 @@ npx @deepseek-ai/dsh web
 
 ## 配置管理
 
-同一页面也提供 Agent、Engine、Environment、Project 和 Permission 的配置管理。保存前会执行 schema、引用及权限策略校验；变更会原子写入、自动备份并记录审计。运行中的 AgentDock API 如提示需要重启，请重启后再使用新配置。
+同一页面也提供 Agent、Engine、Environment、Project 和 Permission 的配置管理。它编辑的是上面 `configPath` 所指向的 AgentDock 业务配置，不编辑 `apiBaseUrl`、`apiTokenEnv`、`bindingStorePath` 或 `defaultAgentId` 这些插件启动参数。保存前会执行 schema、引用及权限策略校验；变更会原子写入、自动备份并记录审计。运行中的 AgentDock API 如提示需要重启，请重启后再使用新配置。
 
 ## 卸载
 

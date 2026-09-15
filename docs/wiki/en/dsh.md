@@ -34,7 +34,7 @@ npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-0.1.0-dev.
 npx @deepseek-ai/dsh web
 ```
 
-The plugin stores DSH → AgentDock mappings in `.agentdock/dsh-session-bindings.json` below DSH's current directory. Override `apiBaseUrl`, `apiTokenEnv`, `bindingStorePath`, or `defaultAgentId` in the profile Cordis configuration when needed. The repository's `docs/dsh-plugin.zh-CN.md` contains the complete configuration reference.
+The plugin stores DSH → AgentDock mappings in `.agentdock/dsh-session-bindings.json` below DSH's current directory. `apiBaseUrl`, `apiTokenEnv`, `bindingStorePath`, and `defaultAgentId` are boot settings: change them in the profile's `cordis.patch.yml`, not the DSH GUI. That patch replaces the complete config for a matching id, so restate every field. Settings → AgentDock edits the AgentDock business configuration selected by `configPath`.
 
 ## Configuration UI
 
