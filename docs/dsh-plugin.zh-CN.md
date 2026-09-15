@@ -55,7 +55,7 @@ npx @deepseek-ai/dsh web
 
 ```yaml
 - id: agentdock-dsh
-  name: 'agentdock/dsh'
+  name: 'agentdock'
   config:
     configPath: 'D:/AI_agent/configs/production.json' # AgentDock 的业务配置，GUI 会编辑它
     apiBaseUrl: 'http://127.0.0.1:4177'

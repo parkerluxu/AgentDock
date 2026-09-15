@@ -1,6 +1,6 @@
 {
   "name": "agentdock",
-  "version": "0.1.0-dev",
+  "version": "0.1.1-dev",
   "description": "Local-first control plane for multi-runtime AI agents.",
   "type": "module",
   "main": "./dist/index.js",
