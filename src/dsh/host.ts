@@ -243,5 +243,3 @@ function toFailure(error: unknown): ReturnType<typeof failure> {
   if (error instanceof ConfigEditorError) return failure(error.code, error.message, error.details ?? {});
   return failure("bad-request", error instanceof Error ? error.message : String(error));
 }
-
-export default { apply };
