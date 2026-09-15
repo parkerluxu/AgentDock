@@ -13,6 +13,7 @@ import { resolveExecutionContext } from "../policy/resolver.js";
 import { configBaseDirectory, configDataPath } from "../runtime/configuration.js";
 import { createBuiltinRuntimeRegistry, createConfiguredRuntimeRegistry, type RuntimeRegistry } from "../runtime/registry.js";
 import { RunService } from "../runtime/run-service.js";
+import { SessionService } from "../runtime/session-service.js";
 import { SqliteRunStore } from "../storage/sqlite-run-store.js";
 import { resolveRoute, RouteResolutionError, type RuntimeHealthStatus } from "../runtime/router.js";
 import { openApiDocument } from "./openapi.js";
@@ -511,6 +512,32 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
       }
       if (request.method === "GET" && path === `${API_PREFIX}/sessions`) {
         writeJson(response, 200, { sessions: store.listSessions() }, apiToken ? [apiToken] : [], activeRedaction);
+        return;
+      }
+      if (request.method === "POST" && path === `${API_PREFIX}/sessions`) {
+        requireJsonContentType(request);
+        const input = parseCreateSessionRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        const routing = resolveRoute(activeConfig, {
+          ...(input.agentId ? { agentId: input.agentId } : {}),
+          ...(input.projectId ? { projectId: input.projectId } : {}),
+          ...(options.engineHealth ? { engineHealth: options.engineHealth } : {}),
+        });
+        // A session can call a native adapter's createSession hook, so it needs
+        // the same safe Environment preparation as a Run.
+        const directories = new EnvironmentDirectoryManager(activeConfig, configBaseDirectory(options.configPath));
+        const environment = await directories.inspect(routing.environmentId);
+        if (environment.drifted) throw new ApiRequestError(409, "ENVIRONMENT_RESCAN_REQUIRED", `Environment "${routing.environmentId}" changed outside AgentDock. Rescan it before creating a session.`);
+        if (!environment.manifest) await directories.rescan(routing.environmentId);
+        else if (!environment.healthy) throw new ApiRequestError(422, "ENVIRONMENT_DIRECTORY_INVALID", environment.issues.join("; "));
+        const context = resolveExecutionContext({
+          config: activeConfig,
+          baseDirectory: configBaseDirectory(options.configPath),
+          ...(routing.agentId ? { agentId: routing.agentId } : {}),
+          environmentId: routing.environmentId,
+          ...(input.projectId ? { projectId: input.projectId } : {}),
+        });
+        const session = await new SessionService(store).create(context, activeRegistry.create(context.engine));
+        writeJson(response, 201, { session }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
       if (request.method === "GET" && (path === `${API_PREFIX}/projects` || path === `${API_PREFIX}/workspaces`)) {
@@ -1054,6 +1081,22 @@ function parseStartRunRequest(body: unknown): Omit<StartRunRequest, "idempotency
     ...(requiredCapabilities ? { requiredCapabilities } : {}),
     ...(network ? { network } : {}),
     ...(filesystemWrite !== undefined ? { filesystemWrite } : {}),
+  };
+}
+
+interface CreateSessionRequest {
+  agentId?: string;
+  projectId?: string;
+}
+
+/** Public API counterpart to `agentdock session create`, used by GUI gateways. */
+function parseCreateSessionRequest(body: unknown): CreateSessionRequest {
+  const input = requiredObject(body, "The session request body must be a JSON object.");
+  const agentId = optionalString(input.agentId, "agentId");
+  const projectId = optionalString(input.projectId, "projectId");
+  return {
+    ...(agentId === undefined ? {} : { agentId }),
+    ...(projectId === undefined ? {} : { projectId }),
   };
 }
 

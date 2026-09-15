@@ -135,8 +135,18 @@ describe("AgentDock local API server", () => {
       expect(openapi.status).toBe(200);
       expect(openapiBody.openapi).toBe("3.0.3");
       expect(openapiBody.paths["/runs/{runId}/events"]).toBeDefined();
+      expect(openapiBody.paths["/sessions"]).toBeDefined();
       expect(openapiBody.paths["/agents/{agentId}/invoke"]).toBeDefined();
       expect(openapiBody.paths["/projects/{projectId}/agents"]).toBeDefined();
+
+      const createdSession = await fetch(`${baseUrl}/sessions`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json" }),
+        body: JSON.stringify({ agentId: "default", projectId: "workspace" }),
+      });
+      const createdSessionBody = await createdSession.json() as { session: { id: string; agentId?: string; projectId?: string } };
+      expect(createdSession.status, JSON.stringify(createdSessionBody)).toBe(201);
+      expect(createdSessionBody.session).toMatchObject({ agentId: "default", projectId: "workspace" });
 
       const created = await fetch(`${baseUrl}/runs`, {
         method: "POST",

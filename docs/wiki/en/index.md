@@ -18,6 +18,8 @@ A good reading path is:
 - A zero-dependency Node client SDK for one-call Agent invocation with SSE reconnect and deduplication.
 - SQLite persistence for Runs, Sessions, events, and idempotency keys.
 
+For per-conversation routing from DeepSeek Harness, see [DeepSeek Harness integration](./dsh).
+
 If your PowerShell directory is outside the source tree, see [Use the CLI and SDK from any PowerShell directory](./sdk) for absolute paths, Project `rootDir`, `npm link`, and ESM Node.js SDK usage.
 
 ## Version and boundaries

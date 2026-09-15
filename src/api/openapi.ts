@@ -25,6 +25,12 @@ export const openApiDocument = {
         operationId: "listSessions",
         responses: { "200": { description: "Local sessions", content: { "application/json": { schema: { type: "object", required: ["sessions"], properties: { sessions: { type: "array", items: { $ref: "#/components/schemas/Session" } } } } } } } },
       },
+      post: {
+        operationId: "createSession",
+        description: "Creates a resumable AgentDock session for the routed Agent. Used by DSH bindings to preserve native agent context.",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateSessionRequest" } } } },
+        responses: { "201": { description: "Session created", content: { "application/json": { schema: { type: "object", required: ["session"], properties: { session: { $ref: "#/components/schemas/Session" } } } } } }, ...errorResponses("400", "401", "409", "413", "415", "422") },
+      },
     },
     "/projects": {
       get: {
@@ -226,6 +232,7 @@ export const openApiDocument = {
       EnvironmentStatus: { type: "object", required: ["environment", "drifted", "healthy", "issues"], properties: { environment: { $ref: "#/components/schemas/AgentEnvironment" }, manifest: { $ref: "#/components/schemas/EnvironmentManifest" }, currentHash: { type: "string" }, drifted: { type: "boolean" }, healthy: { type: "boolean" }, issues: { type: "array", items: { type: "string" } } } },
       EnvironmentMutationRequest: { type: "object", required: ["environment", "revision", "hash"], properties: { environment: { $ref: "#/components/schemas/AgentEnvironment" }, revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } },
       Session: { type: "object", required: ["id", "engineId", "resumable", "status", "createdAt", "updatedAt"], properties: { id: { type: "string" }, projectId: { type: "string" }, agentId: { type: "string" }, engineId: { type: "string" }, environmentId: { type: "string" }, runtimeSessionId: { type: "string" }, resumable: { type: "boolean" }, status: { type: "string", enum: ["active", "archived"] }, createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" } } },
+      CreateSessionRequest: { type: "object", properties: { agentId: { type: "string" }, projectId: { type: "string" } } },
       Project: { type: "object", required: ["id", "rootDir", "agentIds"], properties: { id: { type: "string" }, rootDir: { type: "string" }, agentIds: { type: "array", items: { type: "string" } }, defaultAgentId: { type: "string" }, environmentIds: { type: "array", items: { type: "string" } }, defaultEnvironmentId: { type: "string" } } },
       ProjectAgentBindingRequest: { type: "object", required: ["agentIds", "revision", "hash"], properties: { agentIds: { type: "array", items: { type: "string" } }, defaultAgentId: { type: "string" }, revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } },
       ConfigSnapshot: { type: "object", required: ["config", "revision", "hash"], properties: { config: { type: "object" }, revision: { type: "string" }, hash: { type: "string" } } },

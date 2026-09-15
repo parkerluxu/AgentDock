@@ -1,0 +1,16 @@
+# AgentDock is loaded as a DeepSeek Harness bundle. The host entry is a
+# package subpath so normal `import "agentdock"` consumers still receive the
+# AgentDock SDK rather than the Cordis plugin.
+- insert:
+    - id: agentdock-dsh
+      name: 'agentdock/dsh'
+      config:
+        # Resolved from the directory where `dsh` is started. Override this in
+        # the profile's Cordis configuration when the control-plane config is
+        # kept elsewhere.
+        configPath: '.agentdock/config.json'
+        # The local AgentDock API which owns the real Codex/Claude/etc. runtime.
+        apiBaseUrl: 'http://127.0.0.1:4177'
+        # A reference only: the token itself remains in DSH's process environment.
+        apiTokenEnv: 'AGENTDOCK_API_TOKEN'
+        bindingStorePath: '.agentdock/dsh-session-bindings.json'

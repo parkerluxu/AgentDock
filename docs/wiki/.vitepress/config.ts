@@ -31,6 +31,7 @@ const zhTheme = {
         { text: "本地 API 与 Control Center", link: "/api" },
         { text: "Environment 管理", link: "/environments" },
         { text: "Adapter 开发与安装", link: "/adapters" },
+        { text: "DeepSeek Harness 集成", link: "/dsh" },
       ],
     },
     {
@@ -76,6 +77,7 @@ const enTheme = {
         { text: "Local API & Control Center", link: "/en/api" },
         { text: "Environment management", link: "/en/environments" },
         { text: "Adapter development", link: "/en/adapters" },
+        { text: "DeepSeek Harness integration", link: "/en/dsh" },
       ],
     },
     {
