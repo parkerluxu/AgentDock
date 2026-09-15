@@ -27,4 +27,26 @@ describe("AgentDock DSH LLM adapter", () => {
       { type: "finish", reason: { kind: "stop" } },
     ]);
   });
+
+  it("reads a completed Codex agent message from a legacy status event", async () => {
+    const gateway = {
+      async *invoke() {
+        yield { runId: "run-1", sequence: 0, timestamp: "2026-01-01T00:00:00.000Z", type: "status" as const,
+          payload: { type: "item.completed", item: { type: "agent_message", text: "Codex reply" } } };
+        yield { runId: "run-1", sequence: 1, timestamp: "2026-01-01T00:00:01.000Z", type: "status" as const, payload: { status: "succeeded" } };
+      },
+    };
+    const adapter = new AgentDockLlmAdapter(gateway as never);
+    const chunks = [];
+    for await (const chunk of adapter.stream({
+      provider: "agentdock", model: "bound", sessionId: "dsh-1" as never,
+      messages: [{ role: "user", content: [{ type: "text", text: "Say hello" }] }] as never,
+    })) chunks.push(chunk);
+    expect(chunks).toEqual([
+      { type: "block-start", index: 0, blockType: "text" },
+      { type: "text-delta", index: 0, text: "Codex reply" },
+      { type: "block-end", index: 0, block: { type: "text", text: "Codex reply" } },
+      { type: "finish", reason: { kind: "stop" } },
+    ]);
+  });
 });

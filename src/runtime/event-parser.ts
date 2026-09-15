@@ -22,11 +22,22 @@ export function normalizeRuntimeEvent(value: unknown, runId: string, sequence: n
   const object = isRecord(value) ? value : { value };
   const rawType = typeof object.type === "string" ? object.type : "message";
   let type: RunEvent["type"] = "message";
+  const text = completedAgentMessageText(object);
+  if (text !== undefined) {
+    return { runId, sequence, timestamp: new Date().toISOString(), type: "message", payload: { ...object, text } };
+  }
   if (/error|failed/i.test(rawType)) type = "error";
   else if (/tool_use|tool_call/i.test(rawType)) type = "tool_call";
   else if (/tool_result/i.test(rawType)) type = "tool_result";
   else if (/result|completed|succeeded|status/i.test(rawType)) type = "status";
   return { runId, sequence, timestamp: new Date().toISOString(), type, payload: object };
+}
+
+/** Codex emits its final natural-language answer as `item.completed`. */
+function completedAgentMessageText(value: Record<string, unknown>): string | undefined {
+  if (value.type !== "item.completed" || !isRecord(value.item)) return undefined;
+  const item = value.item;
+  return item.type === "agent_message" && typeof item.text === "string" ? item.text : undefined;
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {

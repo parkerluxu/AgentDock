@@ -29,9 +29,8 @@ export class AgentDockLlmAdapter extends LlmAdapter {
     let terminal: string | undefined;
     try {
       for await (const event of this.gateway.invoke(String(dshSessionId), task, options.signal)) {
-        if (event.type === "message") {
-          const text = typeof event.payload.text === "string" ? event.payload.text : undefined;
-          if (!text) continue;
+        const text = responseText(event.payload);
+        if (text !== undefined) {
           if (!opened) {
             opened = true;
             yield { type: "block-start", index: 0, blockType: "text" };
@@ -63,6 +62,15 @@ export class AgentDockLlmAdapter extends LlmAdapter {
     }
     yield { type: "finish", reason: { kind: "stop" } };
   }
+}
+
+/** Also accepts the raw Codex shape from an AgentDock server that predates the normalizer fix. */
+function responseText(payload: Record<string, unknown>): string | undefined {
+  if (typeof payload.text === "string") return payload.text;
+  const item = payload.item;
+  if (typeof item !== "object" || item === null || Array.isArray(item)) return undefined;
+  const candidate = item as Record<string, unknown>;
+  return candidate.type === "agent_message" && typeof candidate.text === "string" ? candidate.text : undefined;
 }
 
 function latestUserText(options: GenerateOptions): string {

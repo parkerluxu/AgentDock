@@ -15,4 +15,15 @@ describe("runtime event parser", () => {
       sequence: 3,
     });
   });
+
+  it("turns Codex completed agent messages into standard text messages", () => {
+    expect(normalizeRuntimeEvent({
+      type: "item.completed",
+      item: { id: "item-1", type: "agent_message", text: "你好！" },
+    }, "run-3", 4)).toMatchObject({
+      type: "message",
+      sequence: 4,
+      payload: { text: "你好！", item: { type: "agent_message" } },
+    });
+  });
 });
