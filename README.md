@@ -7,19 +7,15 @@
 [![Node.js 22.5+](https://img.shields.io/badge/Node.js-22.5%2B-339933?logo=node.js&logoColor=white&style=flat)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white&style=flat)](https://www.typescriptlang.org/)
 
-[中文说明](docs/wiki/index.md) · [English Wiki](docs/wiki/en/index.md) · [API 参考 / API Reference](docs/api-reference.zh-CN.md) · [安全边界 / Security](docs/wiki/security.md)
+[English README](README.md) · [中文 README](README.zh-CN.md) · [English Wiki](docs/wiki/en/index.md) · [API Reference](docs/api-reference.zh-CN.md) · [Security](docs/wiki/security.md)
 
-## About / 项目简介
+## About
 
 AgentDock is a local-first control plane for managing multiple AI Agent Engines, isolated Environments, Projects, Sessions and auditable Runs on the machine where the Agent CLIs are installed.
 
-AgentDock 是一个 local-first 的 AI Agent 控制面，运行在安装 Agent CLI 的本机上，用于统一管理多个 Agent Engine、隔离的 Environment、Project、Session 以及可审计的 Run 执行记录。
-
 It is a companion to local Agent tools, not a replacement for them. It provides discovery, deterministic routing, configuration isolation, immutable execution snapshots, a loopback HTTP API, a built-in Control Center and local Adapter lifecycle management.
 
-它是本地 Agent 工具的协作层，而不是替代品：提供 Engine 发现、确定性路由、配置隔离、不可变执行快照、仅回环 HTTP API、内置 Control Center 和本地 Adapter 生命周期管理。
-
-## Project tags / 项目标签
+## Project tags
 
 [![local-first](https://img.shields.io/badge/local--first-2563EB?style=flat-square)](docs/wiki/architecture.md)
 [![ai-agents](https://img.shields.io/badge/ai--agents-7C3AED?style=flat-square)](docs/wiki/index.md)
@@ -35,27 +31,23 @@ It is a companion to local Agent tools, not a replacement for them. It provides 
 [![sse](https://img.shields.io/badge/SSE-9333EA?style=flat-square)](docs/sdk-client.zh-CN.md)
 [![sqlite](https://img.shields.io/badge/SQLite-0F766E?style=flat-square)](docs/wiki/architecture.md)
 
-## At a glance / 项目速览
+## At a glance
 
-| English | 中文 |
+| Capability | Description |
 | --- | --- |
-| Local-first control plane for installed Agent CLIs | 面向本机 Agent CLI 的 local-first 控制面 |
-| Engine, Agent, Environment, Permission and Project model | Engine、Agent、Environment、Permission、Project 配置模型 |
-| CLI, loopback HTTP API, SSE and zero-dependency Node SDK | CLI、回环 HTTP API、SSE 以及零依赖 Node SDK |
-| Immutable Run snapshots, ordered events and SQLite persistence | 不可变 Run 快照、有序事件和 SQLite 持久化 |
-| Control Center for history, configuration and diagnostics | 用于历史、配置和诊断的 Control Center |
+| Local-first control plane | Manage installed Agent CLIs on the local machine |
+| Engine, Agent, Environment, Permission and Project model | Make routing, configuration and policy boundaries explicit |
+| CLI, loopback HTTP API, SSE and zero-dependency Node SDK | Integrate from shells, scripts, IDEs and local tools |
+| Immutable Run snapshots, ordered events and SQLite persistence | Keep an auditable record of each execution |
+| Control Center | Inspect history, configuration and diagnostics |
 
-## Boundaries / 边界说明
+## Boundaries
 
 AgentDock keeps Agent configuration and state in named Environments and enforces application-level permission checks. Adapter permissions are declarations and lifecycle checks, not OS or container sandboxing. The API listens only on `127.0.0.1` / `::1`, requires a local Bearer token and is intended for same-machine integrations, not public or remote hosting.
 
-AgentDock 会把 Agent 配置和状态放入命名 Environment，并执行应用层权限检查。Adapter 权限声明和生命周期检查不等同于操作系统或容器级沙箱；API 只监听 `127.0.0.1` / `::1`，要求本地 Bearer Token，面向同机脚本、IDE 和 CI Runner，不是公网或远程部署端点。
-
-## Quick start / 快速开始
+## Quick start
 
 Install Node.js `>=22.5`, then install dependencies and build the CLI:
-
-安装 Node.js `>=22.5` 后，安装依赖并构建 CLI：
 
 ```text
 npm ci
@@ -64,7 +56,7 @@ npm run config:validate -- examples/config.example.json
 node dist/cli.js doctor --config examples/config.example.json
 ```
 
-Preview a safe execution plan without starting an Agent / 在不启动真实 Agent 的情况下预览执行计划：
+Preview a safe execution plan without starting an Agent:
 
 ```text
 node dist/cli.js run dry-run --config examples/config.example.json --project agentdock "inspect the repository"
@@ -72,7 +64,7 @@ node dist/cli.js run dry-run --config examples/config.example.json --project age
 
 For the full CLI, API, Environment, Adapter and troubleshooting walkthrough, read the [AgentDock project Wiki](docs/wiki/index.md) or [English Wiki](docs/wiki/en/index.md).
 
-## Development / 开发
+## Development
 
 ```text
 npm ci
@@ -83,7 +75,7 @@ npm run build
 
 `npm run build` compiles `src/` into `dist/` and produces the runnable `dist/cli.js` entrypoint. For a complete walkthrough covering configuration, CLI workflows, local API deployment, Environment management, Adapter development, security boundaries and troubleshooting, see the [AgentDock project Wiki](docs/wiki/index.md).
 
-### Build and local deployment / 构建与本地运行
+### Build and local deployment
 
 Use the following sequence after a fresh checkout or a TypeScript change:
 
@@ -111,7 +103,7 @@ $env:AGENTDOCK_API_TOKEN = "replace-with-a-long-local-token"
 node dist/cli.js api serve --config examples/config.example.json --port 4177
 ```
 
-### Build the Wiki website / 构建 Wiki 网站
+### Build the Wiki website
 
 The Wiki is a VitePress site backed by multiple Markdown pages under `docs/wiki/`:
 

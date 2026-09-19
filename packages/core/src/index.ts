@@ -27,8 +27,3 @@ export * from "./runtime/run-service.js";
 export * from "./runtime/session-service.js";
 export * from "./environment/manager.js";
 export * from "./sdk/client.js";
-
-// DSH discovers browser modules from the package-root Loader entry.  Re-export
-// the Cordis plugin face here so the same `agentdock` entry can provide both
-// the public SDK and the optional DSH integration.
-export { apply, inject } from "./dsh/host.js";

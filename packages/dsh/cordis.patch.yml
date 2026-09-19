@@ -1,8 +1,8 @@
-# AgentDock is loaded from the package root because DSH discovers browser
-# modules only from package-root Loader entries. The root also exports the SDK.
+# The DSH adapter is a separate package. AgentDock core remains independently
+# usable by the CLI, SDK, and future host adapters.
 - insert:
     - id: agentdock-dsh
-      name: 'agentdock'
+      name: '@agentdock/dsh'
       config:
         # Resolved from the directory where `dsh` is started. Override this in
         # the profile's Cordis configuration when the control-plane config is

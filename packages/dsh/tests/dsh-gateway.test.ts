@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AgentDockGateway } from "../src/dsh/gateway.js";
+import { AgentDockGateway } from "../src/gateway.js";
 
 const tokenKey = "AGENTDOCK_DSH_TEST_TOKEN";
 const originalFetch = globalThis.fetch;

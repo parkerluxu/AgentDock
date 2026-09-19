@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { apply, RPC_METHOD } from "../src/dsh/host.js";
+import { apply, RPC_METHOD } from "../src/host.js";
 
 describe("DeepSeek Harness plugin", () => {
   it("manages an AgentDock config through DSH's authenticated RPC carrier", async () => {

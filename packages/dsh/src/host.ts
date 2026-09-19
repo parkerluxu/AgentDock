@@ -1,8 +1,11 @@
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import { ConfigEditor, ConfigEditorError } from "../config/editor.js";
-import { ConfigValidationError } from "../config/load.js";
-import type { AgentDockConfig } from "../config/schema.js";
+import {
+  ConfigEditor,
+  ConfigEditorError,
+  ConfigValidationError,
+  type AgentDockConfig,
+} from "agentdock";
 import { AgentDockGateway, type AgentDockGatewayConfig } from "./gateway.js";
 import { AgentDockLlmAdapter } from "./llm-adapter.js";
 

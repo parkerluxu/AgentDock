@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AgentDockLlmAdapter } from "../src/dsh/llm-adapter.js";
+import { AgentDockLlmAdapter } from "../src/llm-adapter.js";
 
 describe("AgentDock DSH LLM adapter", () => {
   it("converts an AgentDock message stream into DSH text chunks for the bound session", async () => {

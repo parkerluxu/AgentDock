@@ -23,25 +23,26 @@ DSH 当前会话 ── AgentDock DSH adapter ── AgentDock API ── 已绑
 
 ```powershell
 $env:AGENTDOCK_API_TOKEN = 'replace-with-a-long-random-token'
-node .\dist\cli.js api serve --config .\.agentdock\config.json --port 4177
+node .\packages\core\dist\cli.js api serve --config .\.agentdock\config.json --port 4177
 ```
 
 请从同一 PowerShell 窗口启动 DSH，或在其启动环境中设置 `AGENTDOCK_API_TOKEN`。Token 只从环境变量读取，绝不会写入 DSH profile、AgentDock 配置或会话绑定文件。
 
 ## 安装
 
-在 AgentDock 仓库中构建并打包：
+在 AgentDock monorepo 中构建核心包和 DSH 适配器包：
 
 ```powershell
 npm ci
-npm run build
-npm pack
+npm run build --workspace agentdock
+npm run build --workspace @agentdock/dsh
+npm pack --workspace @agentdock/dsh
 ```
 
-将生成的 `.tgz` 安装到 DSH Web profile：
+先发布或安装匹配版本的 `agentdock` 核心包；DSH 适配器将它作为普通 npm 依赖解析。随后将生成的 DSH `.tgz` 安装到 DSH Web profile：
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-0.1.0-dev.tgz
+npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-dsh-0.1.3-dev.tgz
 npx @deepseek-ai/dsh --profile web --dump-config
 npx @deepseek-ai/dsh web
 ```
@@ -55,7 +56,7 @@ npx @deepseek-ai/dsh web
 
 ```yaml
 - id: agentdock-dsh
-  name: 'agentdock'
+  name: '@agentdock/dsh'
   config:
     configPath: 'D:/AI_agent/configs/production.json' # AgentDock 的业务配置，GUI 会编辑它
     apiBaseUrl: 'http://127.0.0.1:4177'
@@ -72,7 +73,7 @@ npx @deepseek-ai/dsh web
 ## 卸载
 
 ```powershell
-npx @deepseek-ai/dsh plugin --profile web remove -w agentdock
+npx @deepseek-ai/dsh plugin --profile web remove -w @agentdock/dsh
 ```
 
 卸载不会删除 AgentDock 配置、后端 native session、SQLite 数据或绑定映射文件；如不再需要，可手动删除 `.agentdock/dsh-session-bindings.json`。

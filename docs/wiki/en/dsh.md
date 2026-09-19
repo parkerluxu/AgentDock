@@ -19,9 +19,9 @@ Every DSH session has its own AgentDock binding and native AgentDock session. Co
 Build AgentDock, start its loopback API, and give the DSH process the same token:
 
 ```powershell
-npm run build
+npm run build --workspace agentdock
 $env:AGENTDOCK_API_TOKEN = 'replace-with-a-long-random-token'
-node .\dist\cli.js api serve --config .\.agentdock\config.json --port 4177
+node .\packages\core\dist\cli.js api serve --config .\.agentdock\config.json --port 4177
 ```
 
 The token is read only from the environment; it is never saved in a DSH profile, AgentDock configuration, or binding store. The default API URL is `http://127.0.0.1:4177`.
@@ -29,10 +29,13 @@ The token is read only from the environment; it is never saved in a DSH profile,
 ## Install the plugin
 
 ```powershell
-npm pack
-npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-0.1.0-dev.tgz
+npm run build --workspace @agentdock/dsh
+npm pack --workspace @agentdock/dsh
+npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-dsh-0.1.3-dev.tgz
 npx @deepseek-ai/dsh web
 ```
+
+`@agentdock/dsh` depends on the separately published `agentdock` core package. Publish or otherwise make a compatible core version available before installing the DSH adapter.
 
 The plugin stores DSH → AgentDock mappings in `.agentdock/dsh-session-bindings.json` below DSH's current directory. `apiBaseUrl`, `apiTokenEnv`, `bindingStorePath`, and `defaultAgentId` are boot settings: change them in the profile's `cordis.patch.yml`, not the DSH GUI. That patch replaces the complete config for a matching id, so restate every field. Settings → AgentDock edits the AgentDock business configuration selected by `configPath`.
 

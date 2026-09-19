@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import type { AdapterHealth, AdapterManifest, AdapterTaskRequest, AgentAdapter } from "../src/adapter-contract/index.js";
 import { createAgentDockApiServer } from "../src/api/server.js";
@@ -16,6 +17,7 @@ import { EnvironmentDirectoryManager } from "../src/environment/manager.js";
 
 const token = "api-integration-token-1234567890";
 const execFileAsync = promisify(execFile);
+const require = createRequire(import.meta.url);
 
 class ScriptedProcessRunner extends ProcessRunner {
   public readonly requests: ProcessRequest[] = [];
@@ -502,7 +504,7 @@ describe("AgentDock API and Adapter integration", () => {
     const configPath = createConfigFile(directory, config);
     const source = join(process.cwd(), "examples", "adapter-echo");
     const cliPath = join(process.cwd(), "src", "cli.ts");
-    const tsxPath = join(process.cwd(), "node_modules", "tsx", "dist", "cli.mjs");
+    const tsxPath = require.resolve("tsx/cli");
     try {
       await execFileAsync(process.execPath, [tsxPath, cliPath, "adapter", "install", source, "--config", configPath], { cwd: process.cwd() });
       await execFileAsync(process.execPath, [tsxPath, cliPath, "adapter", "enable", "example-echo", "--config", configPath], { cwd: process.cwd() });

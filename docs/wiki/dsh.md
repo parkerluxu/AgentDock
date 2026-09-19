@@ -19,9 +19,9 @@ DSH 会话 → AgentDock DSH adapter → 本机 AgentDock API → 已绑定 agen
 先构建 AgentDock，启动本机 API，并在 DSH 的启动环境中提供同一个 token：
 
 ```powershell
-npm run build
+npm run build --workspace agentdock
 $env:AGENTDOCK_API_TOKEN = 'replace-with-a-long-random-token'
-node .\dist\cli.js api serve --config .\.agentdock\config.json --port 4177
+node .\packages\core\dist\cli.js api serve --config .\.agentdock\config.json --port 4177
 ```
 
 Token 仅通过环境变量读取，不会写入 DSH profile、AgentDock 配置或会话绑定文件。默认 API 地址是 `http://127.0.0.1:4177`。
@@ -29,10 +29,13 @@ Token 仅通过环境变量读取，不会写入 DSH profile、AgentDock 配置�
 ## 安装插件
 
 ```powershell
-npm pack
-npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-0.1.0-dev.tgz
+npm run build --workspace @agentdock/dsh
+npm pack --workspace @agentdock/dsh
+npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-dsh-0.1.3-dev.tgz
 npx @deepseek-ai/dsh web
 ```
+
+`@agentdock/dsh` 依赖独立发布的 `agentdock` 核心包。发布或安装 DSH 适配器前，须先提供兼容版本的核心包。
 
 插件会在 DSH 当前目录下使用 `.agentdock/dsh-session-bindings.json` 保存 DSH → AgentDock session 映射。`apiBaseUrl`、`apiTokenEnv`、`bindingStorePath` 和 `defaultAgentId` 是插件启动参数，必须在 profile 的 `cordis.patch.yml` 修改，而不是 DSH GUI。该文件按 id 替换整个 config，因此覆盖时必须重述所有字段。Settings → AgentDock 编辑的是 `configPath` 指向的 AgentDock 业务配置。
 
