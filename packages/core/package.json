@@ -19,7 +19,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
-    "prepare": "npm run build",
     "prepack": "npm run build",
     "config:validate": "tsx src/cli.ts config validate"
   },
