@@ -26,6 +26,25 @@ export interface AgentDockCatalog {
   projects: Array<{ id: string; agentIds?: string[]; defaultAgentId?: string }>;
 }
 
+const MODEL_AGENT_PREFIX = "agent:";
+
+/** A DSH model id which selects an AgentDock Agent rather than a manually bound route. */
+export function modelIdForAgent(agentId: string): string {
+  return `${MODEL_AGENT_PREFIX}${encodeURIComponent(agentId)}`;
+}
+
+export function agentIdFromModelId(modelId: string): string | undefined {
+  if (!modelId.startsWith(MODEL_AGENT_PREFIX)) return undefined;
+  const encoded = modelId.slice(MODEL_AGENT_PREFIX.length);
+  if (!encoded) return undefined;
+  try {
+    const agentId = decodeURIComponent(encoded);
+    return isId(agentId) ? agentId : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface AgentDockRunEvent {
   runId: string;
   sequence: number;
@@ -113,6 +132,18 @@ export class AgentDockGateway {
     return deleted;
   }
 
+  /** Selects a route from a DSH model choice, without ever reusing another Agent's native session. */
+  public async selectAgentForDshSession(dshSessionId: string, agentId: string, signal?: AbortSignal): Promise<AgentDockSessionBinding> {
+    const catalog = await this.catalog(signal);
+    const agent = catalog.agents.find((item) => item.id === agentId);
+    if (!agent) throw new AgentDockGatewayError("AGENT_NOT_FOUND", `AgentDock agent "${agentId}" was not found.`);
+    if (!agent.enabled) throw new AgentDockGatewayError("AGENT_DISABLED", `AgentDock agent "${agentId}" is disabled.`);
+    const current = await this.binding(dshSessionId);
+    if (current?.agentId === agentId) return current;
+    const projectId = preferredProjectId(catalog.projects, agentId);
+    return this.bind({ dshSessionId, agentId, ...(projectId === undefined ? {} : { projectId }) });
+  }
+
   /** Resolve or create the AgentDock-side session that gives a DSH chat continuity. */
   public async ensureAgentDockSession(dshSessionId: string, signal?: AbortSignal): Promise<AgentDockSessionBinding> {
     const existing = this.sessionCreates.get(dshSessionId);
@@ -139,8 +170,9 @@ export class AgentDockGateway {
   }
 
   /** Streams one DSH user turn through the matching AgentDock agent. */
-  public async *invoke(dshSessionId: string, task: string, signal?: AbortSignal): AsyncIterable<AgentDockRunEvent> {
+  public async *invoke(dshSessionId: string, task: string, signal?: AbortSignal, selectedAgentId?: string): AsyncIterable<AgentDockRunEvent> {
     if (!task.trim()) throw new AgentDockGatewayError("EMPTY_TASK", "AgentDock cannot invoke an empty task.");
+    if (selectedAgentId !== undefined) await this.selectAgentForDshSession(dshSessionId, selectedAgentId, signal);
     const binding = await this.ensureAgentDockSession(dshSessionId, signal);
     const response = await this.fetch(`/agents/${encodeURIComponent(binding.agentId)}/invoke`, {
       method: "POST",
@@ -236,6 +268,14 @@ function normalizeApiBaseUrl(value: string): string {
 }
 
 function isId(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
+
+function preferredProjectId(projects: AgentDockCatalog["projects"], agentId: string): string | undefined {
+  const defaultMatches = projects.filter((project) => project.defaultAgentId === agentId);
+  if (defaultMatches.length === 1) return defaultMatches[0]?.id;
+  const allowedMatches = projects.filter((project) => project.agentIds?.includes(agentId));
+  return allowedMatches.length === 1 ? allowedMatches[0]?.id : undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 
 function isBinding(value: unknown): value is AgentDockSessionBinding {

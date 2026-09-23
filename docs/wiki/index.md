@@ -4,8 +4,9 @@ AgentDock 是一个 local-first 的 AI Agent 控制面：它发现并管理多�
 
 推荐阅读路径如下：
 
-1. [快速开始](./getting-started) —— 安装依赖、构建项目并完成第一次 dry-run。
-2. [配置模型](./configuration) —— 理解 Engine、Agent、Environment、Permission 和 Project 的关系。
+1. [安装与快速开始](./getting-started) —— 构建项目、使用 Echo 完成第一次 dry-run/Run，理解项目目录。
+2. [架构与核心概念](./architecture) —— 了解各组件含义及源码职责。
+3. [配置模型](./configuration) —— 理解 Engine、Agent、Environment、Permission 和 Project 的关系。
 3. [典型工作流](./workflows) —— 执行、审计、Session、API 和 Adapter 的完整示例。
 4. [从源码构建与本地部署](./build-and-deploy) —— 构建 AgentDock 和 Wiki，并在本机运行。
 
@@ -19,7 +20,7 @@ AgentDock 是一个 local-first 的 AI Agent 控制面：它发现并管理多�
 
 ## 版本与边界
 
-当前版本为 `0.1.0-dev`，要求 Node.js `>=22.5`。本地 Adapter 的权限声明不是操作系统或容器级沙箱；API 只监听 `127.0.0.1` / `::1`，适合同机脚本、IDE 和 CI Runner，不是远程服务端点。
+当前 workspace package 版本为 0.1.3-dev，要求 Node.js 22.5 或更高。本地 Adapter 的权限声明不是操作系统或容器级沙箱；API 只监听 127.0.0.1 / ::1，适合同机脚本、IDE 和 CI Runner，不是远程服务端点。
 
 ## 页面地图
 
@@ -31,6 +32,6 @@ AgentDock 是一个 local-first 的 AI Agent 控制面：它发现并管理多�
 | 集成 | [本地 API](./api)、[本地调用 SDK](./sdk)、[Adapter SDK](./adapters)、[DeepSeek Harness 集成](./dsh) |
 | 运维 | [Environment](./environments)、[安全边界](./security)、[故障排查](./troubleshooting) |
 
-如果 PowerShell 当前目录不在源码目录，请先阅读[任意目录调用 CLI 与 SDK](./sdk)，其中说明绝对路径、Project `rootDir`、`npm link` 以及 ESM Node.js SDK 的使用方式。
+如果 PowerShell 当前目录不在源码目录，请先阅读[任意目录调用 CLI 与 SDK](./sdk)，其中说明绝对路径、Project rootDir、本地全局安装以及 ESM Node.js SDK 的使用方式。
 
 更细的字段和兼容性说明仍保留在仓库的 [配置参考](https://github.com/parkerluxu/AgentDock/blob/main/docs/configuration-reference.zh-CN.md)、[API 参考](https://github.com/parkerluxu/AgentDock/blob/main/docs/api-reference.zh-CN.md)、[Adapter SDK](https://github.com/parkerluxu/AgentDock/blob/main/docs/adapter-sdk.zh-CN.md) 和 [迁移指南](https://github.com/parkerluxu/AgentDock/blob/main/docs/migration-guide.zh-CN.md)。

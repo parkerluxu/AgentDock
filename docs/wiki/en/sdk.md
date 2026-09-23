@@ -7,7 +7,7 @@ This page explains how to keep using the AgentDock CLI, Node.js SDK, and local H
 | Path | Meaning | Controlled by |
 | --- | --- | --- |
 | PowerShell current directory | Where the command starts; it does not automatically become the Agent working directory. | The current Shell |
-| CLI entrypoint | The location of the built `dist/cli.js`. | An absolute path, `npm link`, or PATH |
+| CLI entrypoint | The built packages/core/dist/cli.js. | An absolute path, local npm install, or PATH |
 | Configuration file path | The base for relative config paths, `dataDir`, and Environment directories. | `--config` |
 | Project `rootDir` | The working directory where the Agent actually executes. | The Project configuration |
 | Environment home | The Agent config/state/cache and native home directories; it is not the project working directory. | The Agent's Environment binding |
@@ -32,8 +32,8 @@ On Windows, the same path may be written as `D:\\work\\other-project`. Absolute 
 Preview the resolved context without starting an Agent:
 
 ```powershell
-node "D:\AI_agent\cases\AgentDock\dist\cli.js" run dry-run `
-  --config "D:\AI_agent\cases\AgentDock\examples\config.example.json" `
+node "D:\AI_agent\cases\AgentDock\packages\core\dist\cli.js" run dry-run `
+  --config "D:\AI_agent\cases\AgentDock\packages\core\examples\config.example.json" `
   --agent new-agent --project other-project hello
 ```
 
@@ -43,19 +43,17 @@ After building once, call the CLI with an absolute entrypoint and absolute confi
 
 ```powershell
 $repo = "D:\AI_agent\cases\AgentDock"
-$config = "$repo\examples\config.example.json"
-node "$repo\dist\cli.js" agent run new-agent --config $config --project other-project hello
+$config = "$repo\packages\core\examples\config.example.json"
+node "$repo\packages\core\dist\cli.js" agent run new-agent --config $config --project other-project hello
 ```
 
-For a convenient global command, run `npm link` once from the source tree:
+For a global command, pack and install the core workspace from the repository root:
 
 ```powershell
-Push-Location "D:\AI_agent\cases\AgentDock"
-npm link
-Pop-Location
-
+npm pack --workspace agentdock
+npm install --global .\agentdock-0.1.3-dev.tgz
 agentdock agent run new-agent `
-  --config "D:\AI_agent\cases\AgentDock\examples\config.example.json" `
+  --config "D:\AI_agent\cases\AgentDock\packages\core\examples\config.example.json" `
   --project other-project hello
 ```
 
@@ -71,7 +69,7 @@ When running an inline SDK program from another PowerShell directory, import the
 
 ```powershell
 $repo = "D:\AI_agent\cases\AgentDock"
-$env:AGENTDOCK_SDK_ENTRY = "$repo\dist\index.js"
+$env:AGENTDOCK_SDK_ENTRY = "$repo\packages\core\dist\index.js"
 $env:AGENTDOCK_API_BASE = "http://127.0.0.1:4177/api/v1"
 $env:AGENTDOCK_API_TOKEN = "replace-with-your-local-api-token"
 
@@ -81,6 +79,19 @@ node --input-type=module -e 'const {pathToFileURL}=await import("node:url"); con
 The SDK `projectId` must match a Project in the configuration. The SDK currently has no per-call `cwd` or `workingDirectory` option. Add a Project and point its `rootDir` at the target directory when the working directory needs to change.
 
 `baseUrl` is the API service address and is independent of the PowerShell directory and the Project `rootDir`. Provide the token through an environment variable or another local secret mechanism; never commit it to configuration or source code.
+
+When an automation needs to explain Agent selection before execution, use the read-only `previewRouting` call instead of creating a Run:
+
+```js
+const preview = await client.previewRouting({
+  task: "Review the current repository's test failures",
+  projectId: "agentdock",
+  network: "deny",
+});
+console.log(preview.routing.candidates, preview.error);
+```
+
+This always returns `executes: false` and never creates a Run. When no route is available or an Environment is not ready, inspect `preview.error` and each candidate's `reasons`, resolve the issue, then call `client.agent(agentId).run(...)` or create a Run.
 
 ## Preflight checklist
 

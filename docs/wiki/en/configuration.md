@@ -16,7 +16,7 @@ Configuration is strict version `1` JSON. The default path is `.agentdock/config
 | `storage` | `retentionDays` and `saveOutput`. |
 | `logging` / `redaction` | Log level and additional redaction keys. |
 
-See [`examples/config.example.json`](https://github.com/parkerluxu/AgentDock/blob/main/examples/config.example.json) for a complete Claude Code and Codex example.
+For a first run without a model CLI, use [`packages/core/examples/config.quickstart.json`](https://github.com/parkerluxu/AgentDock/blob/main/packages/core/examples/config.quickstart.json). The [full sample config](https://github.com/parkerluxu/AgentDock/blob/main/packages/core/examples/config.example.json) contains Claude Code and Codex examples.
 
 ## Paths and validation
 
@@ -41,15 +41,15 @@ When running outside the source tree, use absolute paths for both the CLI entryp
 
 ```powershell
 $repo = "D:\AI_agent\cases\AgentDock"
-$config = "$repo\examples\config.example.json"
-node "$repo\dist\cli.js" agent run new-agent --config $config --project other-project hello
+$config = "$repo\packages\core\examples\config.example.json"
+node "$repo\packages\core\dist\cli.js" agent run new-agent --config $config --project other-project hello
 ```
 
 The CLI currently has no per-call `--cwd` option, and the SDK has no `workingDirectory` option. Change the working directory by routing through a Project with the desired `rootDir`. See [Use the CLI and SDK from any PowerShell directory](./sdk) for more examples.
 
 ```text
-npm run config:validate -- .agentdock/config.json
-node dist/cli.js doctor --config .agentdock/config.json
+node packages/core/dist/cli.js config validate .agentdock/config.json
+node packages/core/dist/cli.js doctor --config .agentdock/config.json
 ```
 
 Validation checks schema, unique IDs, references, Project defaults, and Environment inheritance cycles. The Control Center additionally previews diffs and high-risk changes before an atomic save.

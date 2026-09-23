@@ -123,6 +123,8 @@ describe("AgentDock local API server", () => {
       expect(uiHtml).toContain("建议按顺序配置");
       expect(uiHtml).toContain("data-project-environment");
       expect(uiHtml).toContain("fields.environmentIdsHelp");
+      expect(uiHtml).toContain("data-agent-health");
+      expect(uiHtml).toContain("request('/agent-health')");
       expect((await fetch(`${baseUrl}/health`, { headers: authHeaders(fixture.token) })).status).toBe(200);
       const projects = await fetch(`${baseUrl}/projects`, { headers: authHeaders(fixture.token) });
       expect(projects.status).toBe(200);
@@ -130,6 +132,13 @@ describe("AgentDock local API server", () => {
       const agents = await fetch(`${baseUrl}/agents`, { headers: authHeaders(fixture.token) });
       expect(agents.status).toBe(200);
       expect((await agents.json() as { agents: Array<{ id: string }> }).agents[0]?.id).toBe("default");
+      const agentHealth = await fetch(`${baseUrl}/agent-health`, { headers: authHeaders(fixture.token) });
+      expect(agentHealth.status).toBe(200);
+      expect(await agentHealth.json() as { readOnly: boolean; isSecuritySandbox: boolean; agents: Array<{ agentId: string; environment: { readiness: string } }> }).toMatchObject({
+        readOnly: true,
+        isSecuritySandbox: false,
+        agents: [{ agentId: "default", environment: { readiness: "invalid" } }],
+      });
       const openapi = await fetch(`${baseUrl}/openapi.json`, { headers: authHeaders(fixture.token) });
       const openapiBody = await openapi.json() as { openapi: string; paths: Record<string, unknown> };
       expect(openapi.status).toBe(200);
@@ -137,6 +146,7 @@ describe("AgentDock local API server", () => {
       expect(openapiBody.paths["/runs/{runId}/events"]).toBeDefined();
       expect(openapiBody.paths["/sessions"]).toBeDefined();
       expect(openapiBody.paths["/agents/{agentId}/invoke"]).toBeDefined();
+      expect(openapiBody.paths["/agent-health"]).toBeDefined();
       expect(openapiBody.paths["/projects/{projectId}/agents"]).toBeDefined();
 
       const createdSession = await fetch(`${baseUrl}/sessions`, {
@@ -211,6 +221,48 @@ describe("AgentDock local API server", () => {
         body: JSON.stringify({ task: "missing-stream", projectId: "workspace" }),
       });
       expect(withoutSse.status).toBe(406);
+    } finally {
+      await fixture.api.close();
+      fixture.store.close();
+      rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the same stable Session identity errors from an Agent invocation", async () => {
+    const fixture = createFixture(10);
+    try {
+      const address = await fixture.api.listen();
+      const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const cases = [
+        { id: "session-agent", agentId: "other-agent", engineId: "fake", environmentId: "default", status: "active", code: "SESSION_AGENT_MISMATCH" },
+        { id: "session-engine", agentId: "default", engineId: "other-engine", environmentId: "default", status: "active", code: "SESSION_ENGINE_MISMATCH" },
+        { id: "session-environment", agentId: "default", engineId: "fake", environmentId: "other-environment", status: "active", code: "SESSION_ENVIRONMENT_MISMATCH" },
+        { id: "session-archived", agentId: "default", engineId: "fake", environmentId: "default", status: "archived", code: "SESSION_ARCHIVED" },
+      ] as const;
+      for (const candidate of cases) {
+        fixture.store.createSession({
+          id: candidate.id,
+          agentId: candidate.agentId,
+          engineId: candidate.engineId,
+          environmentId: candidate.environmentId,
+          resumable: true,
+        });
+        if (candidate.status === "archived") fixture.store.updateSession(candidate.id, { status: "archived" });
+        const response = await fetch(`${baseUrl}/agents/default/invoke`, {
+          method: "POST",
+          headers: authHeaders(fixture.token, { "content-type": "application/json", accept: "text/event-stream" }),
+          body: JSON.stringify({ task: "resume", projectId: "workspace", sessionId: candidate.id }),
+        });
+        expect(response.status).toBe(409);
+        expect((await response.json() as { error: { code: string } }).error.code).toBe(candidate.code);
+      }
+      const missing = await fetch(`${baseUrl}/agents/default/invoke`, {
+        method: "POST",
+        headers: authHeaders(fixture.token, { "content-type": "application/json", accept: "text/event-stream" }),
+        body: JSON.stringify({ task: "resume", projectId: "workspace", sessionId: "missing-session" }),
+      });
+      expect(missing.status).toBe(404);
+      expect((await missing.json() as { error: { code: string } }).error.code).toBe("SESSION_NOT_FOUND");
     } finally {
       await fixture.api.close();
       fixture.store.close();
@@ -372,6 +424,103 @@ describe("AgentDock local API server", () => {
       });
       expect(restored.status).toBe(200);
       expect(JSON.parse(readFileSync(join(fixture.directory, "config.json"), "utf8"))).toMatchObject({ engines: [{ args: [] }] });
+    } finally {
+      await fixture.api.close();
+      fixture.store.close();
+      rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("archives ready Environment config as a template and creates a new managed Environment from it", async () => {
+    const fixture = createFixture(10);
+    try {
+      const address = await fixture.api.listen();
+      const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const headers = authHeaders(fixture.token, { "content-type": "application/json" });
+      const initialRescan = await fetch(`${baseUrl}/environments/default/rescan`, { method: "POST", headers: authHeaders(fixture.token) });
+      const initialManifest = await initialRescan.json() as { manifest: { configDir: string } };
+      expect(initialRescan.status).toBe(200);
+      writeFileSync(join(initialManifest.manifest.configDir, "agent.json"), "from-template\n");
+      writeFileSync(join(initialManifest.manifest.configDir, "auth.json"), "template-api-token-must-not-copy\n");
+      const confirmedRescan = await fetch(`${baseUrl}/environments/default/rescan`, { method: "POST", headers: authHeaders(fixture.token) });
+      expect(confirmedRescan.status).toBe(200);
+
+      const created = await fetch(`${baseUrl}/environment-templates`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ templateId: "api-review", sourceEnvironmentId: "default" }),
+      });
+      const createdBody = await created.json() as { template: { id: string; sourceEnvironmentId: string; configHash: string; skipped: Array<{ category: string; count: number }> } };
+      expect(created.status).toBe(201);
+      expect(createdBody.template).toMatchObject({ id: "api-review", sourceEnvironmentId: "default", configHash: expect.any(String), skipped: [{ category: "secret", count: expect.any(Number) }] });
+
+      const listed = await fetch(`${baseUrl}/environment-templates`, { headers: authHeaders(fixture.token) });
+      expect(listed.status).toBe(200);
+      expect((await listed.json() as { templates: Array<{ id: string }> }).templates).toEqual([{ id: "api-review", sourceEnvironmentId: "default", engineId: "fake", createdAt: expect.any(String), configHash: createdBody.template.configHash, skipped: [{ category: "secret", count: expect.any(Number) }], templateVersion: 1 }]);
+
+      const configSnapshot = await (await fetch(`${baseUrl}/config`, { headers: authHeaders(fixture.token) })).json() as { revision: string; hash: string };
+      const applied = await fetch(`${baseUrl}/environment-templates/api-review/apply`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          environment: { id: "from-template", engineId: "fake", permissionId: "readonly", directoryMode: "managed", settings: {} },
+          revision: configSnapshot.revision,
+          hash: configSnapshot.hash,
+          confirmHighRisk: true,
+        }),
+      });
+      const appliedBody = await applied.json() as { environment: { id: string }; manifest: { configDir: string; stateDir: string; cacheDir: string; configHash: string } };
+      expect(applied.status, JSON.stringify(appliedBody)).toBe(201);
+      expect(appliedBody).toMatchObject({ environment: { id: "from-template" }, manifest: { configHash: createdBody.template.configHash } });
+      expect(readFileSync(join(appliedBody.manifest.configDir, "agent.json"), "utf8")).toBe("from-template\n");
+      expect(() => readFileSync(join(appliedBody.manifest.configDir, "auth.json"), "utf8")).toThrow();
+      expect(() => readFileSync(join(appliedBody.manifest.stateDir, "session.json"), "utf8")).toThrow();
+      expect(() => readFileSync(join(appliedBody.manifest.cacheDir, "index"), "utf8")).toThrow();
+    } finally {
+      await fixture.api.close();
+      fixture.store.close();
+      rmSync(fixture.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("previews routing without creating a Run and keeps rejection candidates explainable", async () => {
+    const fixture = createFixture(10);
+    try {
+      const address = await fixture.api.listen();
+      const baseUrl = `http://${address.host}:${address.port}/api/v1`;
+      const headers = authHeaders(fixture.token, { "content-type": "application/json" });
+      const beforeReady = await fetch(`${baseUrl}/routing/preview`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ task: "inspect", agentId: "default", projectId: "workspace" }),
+      });
+      const beforeReadyBody = await beforeReady.json() as { executes: boolean; error: { code: string }; routing: { candidates: Array<{ agentId: string }> } };
+      expect(beforeReady.status).toBe(200);
+      expect(beforeReadyBody).toMatchObject({ executes: false, error: { code: "ENVIRONMENT_DIRECTORY_INVALID" }, routing: { candidates: [{ agentId: "default" }] } });
+      expect(fixture.store.listRuns()).toHaveLength(0);
+
+      await fetch(`${baseUrl}/environments/default/rescan`, { method: "POST", headers: authHeaders(fixture.token) });
+      const ready = await fetch(`${baseUrl}/routing/preview`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ task: "inspect", projectId: "workspace" }),
+      });
+      expect(await ready.json() as { executes: boolean; routing: { mode: string; agentId: string; candidates: Array<{ agentId: string; accepted: boolean }> } }).toMatchObject({
+        executes: false,
+        routing: { mode: "project_default", agentId: "default", candidates: [{ agentId: "default", accepted: true }] },
+      });
+
+      const rejected = await fetch(`${baseUrl}/routing/preview`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ task: "inspect", projectId: "workspace", network: "allow" }),
+      });
+      expect(await rejected.json() as { executes: boolean; error: { code: string }; routing: { candidates: Array<{ agentId: string; reasons: string[] }> } }).toMatchObject({
+        executes: false,
+        error: { code: "NO_ROUTE_CANDIDATE" },
+        routing: { candidates: [{ agentId: "default", reasons: ["Network permission does not match"] }] },
+      });
+      expect(fixture.store.listRuns()).toHaveLength(0);
     } finally {
       await fixture.api.close();
       fixture.store.close();

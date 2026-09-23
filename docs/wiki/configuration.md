@@ -19,7 +19,7 @@
 
 ## 一份可运行的结构
 
-仓库内的 [`examples/config.example.json`](https://github.com/parkerluxu/AgentDock/blob/main/examples/config.example.json) 已包含 Claude Code 和 Codex 的完整示例。结构可以概括为：
+第一次体验可使用不需要模型 CLI 的 [`packages/core/examples/config.quickstart.json`](https://github.com/parkerluxu/AgentDock/blob/main/packages/core/examples/config.quickstart.json)。需要真实 Runtime 时，[完整示例配置](https://github.com/parkerluxu/AgentDock/blob/main/packages/core/examples/config.example.json)包含 Claude Code 和 Codex 配置。结构可以概括为：
 
 ```json
 {
@@ -97,8 +97,8 @@ PowerShell 当前目录只是启动命令的位置，不会自动成为 Agent �
 
 ```powershell
 $repo = "D:\AI_agent\cases\AgentDock"
-$config = "$repo\examples\config.example.json"
-node "$repo\dist\cli.js" agent run new-agent --config $config --project other-project hello
+$config = "$repo\packages\core\examples\config.example.json"
+node "$repo\packages\core\dist\cli.js" agent run new-agent --config $config --project other-project hello
 ```
 
 CLI 当前没有单次调用级别的 `--cwd` 参数；SDK 也没有 `workingDirectory` 参数。需要切换工作目录时，应通过不同 Project 的 `rootDir` 路由。更多示例见[任意目录调用 CLI 与 SDK](./sdk)。
@@ -106,8 +106,8 @@ CLI 当前没有单次调用级别的 `--cwd` 参数；SDK 也没有 `workingDir
 ## 校验与修改
 
 ```text
-npm run config:validate -- .agentdock/config.json
-node dist/cli.js doctor --config .agentdock/config.json
+node packages/core/dist/cli.js config validate .agentdock/config.json
+node packages/core/dist/cli.js doctor --config .agentdock/config.json
 ```
 
 校验包括 JSON/schema、ID 唯一性、引用存在性、Project 默认项归属和 Environment 继承环。Web 配置中心保存前还会做跨对象校验、dry-run、差异和高风险确认；保存使用 revision/hash 冲突检测、临时文件和原子替换，安全变更会自动热加载。API 也会监听配置文件的外部修改；无效修改不会替换当前有效运行配置。

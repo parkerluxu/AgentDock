@@ -4,8 +4,9 @@ AgentDock is a local-first control plane for discovering and managing AI Agent E
 
 A good reading path is:
 
-1. [Getting started](./getting-started) — install, build, and run your first dry-run.
-2. [Configuration](./configuration) — understand Engines, Agents, Environments, Permissions, and Projects.
+1. [Getting started](./getting-started) — build the project, run the Echo demo, and understand the repository map.
+2. [Architecture and core concepts](./architecture) — learn what the components and source folders do.
+3. [Configuration](./configuration) — understand Engines, Agents, Environments, Permissions, and Projects.
 3. [Plain-language case study](./case-study) — follow one repository review from start to finish.
 4. [Build and local deployment](./build-and-deploy) — build both AgentDock and this Wiki.
 
@@ -20,8 +21,8 @@ A good reading path is:
 
 For per-conversation routing from DeepSeek Harness, see [DeepSeek Harness integration](./dsh).
 
-If your PowerShell directory is outside the source tree, see [Use the CLI and SDK from any PowerShell directory](./sdk) for absolute paths, Project `rootDir`, `npm link`, and ESM Node.js SDK usage.
+If your PowerShell directory is outside the source tree, see [Use the CLI and SDK from any PowerShell directory](./sdk) for absolute paths, Project rootDir, local global installation, and ESM Node.js SDK usage.
 
 ## Version and boundaries
 
-The current version is `0.1.0-dev` and requires Node.js `>=22.5`. Adapter permissions are declarations and lifecycle checks, not OS or container sandboxing. The API listens only on `127.0.0.1` / `::1` and is intended for same-machine integrations.
+The current workspace package version is 0.1.3-dev and requires Node.js 22.5 or later. Adapter permissions are declarations and lifecycle checks, not OS or container sandboxing. The API listens only on 127.0.0.1 / ::1 and is intended for same-machine integrations.

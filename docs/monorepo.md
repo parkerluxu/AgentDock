@@ -40,23 +40,15 @@ npm run test --workspace @agentdock/dsh
 The core example configuration is located at
 `packages/core/examples/config.example.json`.
 
-## Publishing order
+## Packaging and publishing
 
-Publish the core package before an adapter release:
+The `agentdock` core CLI/SDK and the DSH adapter may be released independently. The DSH host bundle embeds the control-plane code needed for its configuration UI, so its local artifact does not require a separately published or packed core package.
 
-```text
-1. Publish agentdock
-2. Set @agentdock/dsh's agentdock dependency to that compatible version
-3. Publish @agentdock/dsh
-```
-
-For DSH, package and install only the adapter artifact:
+For a local DSH installation, package and install only the self-contained adapter artifact:
 
 ```powershell
 npm pack --workspace @agentdock/dsh
 npx @deepseek-ai/dsh plugin --profile web add -w .\agentdock-dsh-<version>.tgz
 ```
 
-The DSH environment resolves the matching `agentdock` core package as a normal
-npm dependency. Core users who do not install `@agentdock/dsh` do not receive
-DSH, Cordis, or React dependencies.
+Core users who do not install `@agentdock/dsh` do not receive DSH, Cordis, or React dependencies.

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { NetworkPolicy, Run, RunEvent, RuntimeCapability, RunStatus } from "../core/types.js";
+import type { NetworkPolicy, Run, RunEvent, RunRouteSnapshot, RuntimeCapability, RunStatus } from "../core/types.js";
 
 export interface AgentDockClientOptions {
   /** API base URL, for example http://127.0.0.1:4177/api/v1. */
@@ -42,11 +42,33 @@ export interface AgentRunResult {
   events: RunEvent[];
 }
 
+/** Non-mutating route query shared by local scripts and Control Center clients. */
+export interface RoutingPreviewOptions {
+  task: string;
+  agentId?: string;
+  environmentId?: string;
+  projectId?: string;
+  requiredCapabilities?: RuntimeCapability[];
+  network?: NetworkPolicy;
+  filesystemWrite?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface RoutingPreview {
+  task: string;
+  executes: boolean;
+  routing: RunRouteSnapshot | Record<string, unknown>;
+  error?: { code?: string; message?: string };
+  environment?: Record<string, unknown>;
+}
+
 export class AgentDockClientError extends Error {
   public constructor(
     message: string,
     public readonly statusCode?: number,
     public readonly details?: unknown,
+    /** Machine-readable `error.code` returned by the local API, when present. */
+    public readonly code?: string,
   ) {
     super(message);
     this.name = "AgentDockClientError";
@@ -79,6 +101,36 @@ export class AgentDockClient {
 
   public async run(agentId: string, options: AgentRunOptions): Promise<AgentRunResult> {
     return this.agent(agentId).run(options);
+  }
+
+  public async previewRouting(options: RoutingPreviewOptions): Promise<RoutingPreview> {
+    const task = options.task.trim();
+    if (task.length === 0) throw new Error("The routing preview task must not be empty.");
+    const response = await this.request("routing/preview", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        task,
+        ...(options.agentId ? { agentId: options.agentId } : {}),
+        ...(options.environmentId ? { environmentId: options.environmentId } : {}),
+        ...(options.projectId ? { projectId: options.projectId } : {}),
+        ...(options.requiredCapabilities ? { requiredCapabilities: options.requiredCapabilities } : {}),
+        ...(options.network ? { network: options.network } : {}),
+        ...(options.filesystemWrite !== undefined ? { filesystemWrite: options.filesystemWrite } : {}),
+      }),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+    await assertResponse(response);
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new AgentDockClientError("The AgentDock routing preview response was not valid JSON.");
+    }
+    if (!isRecord(body) || typeof body.task !== "string" || typeof body.executes !== "boolean" || !isRecord(body.routing)) {
+      throw new AgentDockClientError("The AgentDock routing preview response had an invalid shape.");
+    }
+    return body as unknown as RoutingPreview;
   }
 
   public async request(path: string, init: RequestInit): Promise<Response> {
@@ -287,7 +339,8 @@ async function assertResponse(response: Response): Promise<void> {
   let details: unknown;
   try { details = await response.clone().json(); } catch { /* Use the status when the body is not JSON. */ }
   const message = isRecord(details) && isRecord(details.error) && typeof details.error.message === "string" ? details.error.message : `AgentDock returned HTTP ${response.status}.`;
-  throw new AgentDockClientError(message, response.status, details);
+  const code = isRecord(details) && isRecord(details.error) && typeof details.error.code === "string" ? details.error.code : undefined;
+  throw new AgentDockClientError(message, response.status, details, code);
 }
 
 async function notify(callback: AgentRunOptions["onEvent"], event: AgentInvocationEvent): Promise<void> {

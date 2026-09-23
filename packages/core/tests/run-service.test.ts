@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentAdapter, AdapterManifest, AdapterTaskRequest } from "../src/adapter-contract/index.js";
 import type { AdapterHealth, AdapterSessionReference } from "../src/adapter-contract/index.js";
+import { SessionNotFoundError } from "../src/core/errors.js";
 import type { ExecutionContext, RunEvent } from "../src/core/types.js";
 import { RunService } from "../src/runtime/run-service.js";
 import { SqliteRunStore } from "../src/storage/sqlite-run-store.js";
@@ -69,7 +70,7 @@ describe("RunService", () => {
     }
   });
 
-  it("does not resume a Session in a different Agent Environment", async () => {
+  it("rejects a Session from a different Agent, Engine, Environment, or archived state with stable codes", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentdock-run-service-session-identity-"));
     const store = new SqliteRunStore(join(directory, "agentdock.db"));
     try {
@@ -78,14 +79,19 @@ describe("RunService", () => {
       for await (const result of service.execute({ context, task: "initial", adapter: new FakeAdapter() })) first.push(result);
       const sessionId = first[0]?.run.sessionId;
       expect(sessionId).toBeDefined();
-      const otherContext: ExecutionContext = {
+      const runWith = async (candidate: ExecutionContext, candidateSessionId = sessionId): Promise<void> => {
+        for await (const _result of service.execute({ context: candidate, sessionId: candidateSessionId, task: "wrong profile", adapter: new FakeAdapter() })) { /* consume */ }
+      };
+      const differentAgent: ExecutionContext = {
         ...context,
         agent: { ...context.agent!, id: "other-agent" },
-        agentEnvironment: { ...context.agentEnvironment, id: "other-environment" },
       };
-      await expect((async () => {
-        for await (const _result of service.execute({ context: otherContext, sessionId, task: "wrong profile", adapter: new FakeAdapter() })) { /* consume */ }
-      })()).rejects.toThrow(/belongs to Agent/);
+      await expect(runWith(differentAgent)).rejects.toMatchObject({ code: "SESSION_AGENT_MISMATCH" });
+      await expect(runWith({ ...context, engine: { ...context.engine, id: "other-engine" } })).rejects.toMatchObject({ code: "SESSION_ENGINE_MISMATCH" });
+      await expect(runWith({ ...context, agentEnvironment: { ...context.agentEnvironment, id: "other-environment" } })).rejects.toMatchObject({ code: "SESSION_ENVIRONMENT_MISMATCH" });
+      store.updateSession(sessionId as string, { status: "archived" });
+      await expect(runWith(context)).rejects.toMatchObject({ code: "SESSION_ARCHIVED" });
+      await expect(runWith(context, "missing-session")).rejects.toBeInstanceOf(SessionNotFoundError);
     } finally {
       store.close();
       rmSync(directory, { recursive: true, force: true });

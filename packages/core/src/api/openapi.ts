@@ -14,6 +14,21 @@ export const openApiDocument = {
         responses: { "200": { description: "API health", content: { "application/json": { schema: { $ref: "#/components/schemas/HealthResponse" } } } } },
       },
     },
+    "/agent-health": {
+      get: {
+        operationId: "getAgentHealth",
+        description: "Returns a cached, read-only Agent health summary. It inspects local configuration, Environment manifests/directories, and SQLite metadata without launching a Runtime or resolving Secret References.",
+        responses: { "200": { description: "Agent health summaries", content: { "application/json": { schema: { $ref: "#/components/schemas/AgentHealthReport" } } } }, ...errorResponses("401") },
+      },
+    },
+    "/routing/preview": {
+      post: {
+        operationId: "previewRouting",
+        description: "Returns a non-mutating dry-run route explanation. It never creates a Run and includes rejected candidates when no route can be selected.",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/CreateRunRequest" } } } },
+        responses: { "200": { description: "Routing explanation and dry-run context", content: { "application/json": { schema: { type: "object" } } } }, ...errorResponses("400", "401", "413", "415", "422") },
+      },
+    },
     "/openapi.json": {
       get: {
         operationId: "getOpenApiDocument",
@@ -97,6 +112,31 @@ export const openApiDocument = {
         operationId: "importEnvironment",
         requestBody: { required: true, content: { "application/json": { schema: { allOf: [{ $ref: "#/components/schemas/EnvironmentMutationRequest" }, { type: "object", required: ["sourceConfigDir"], properties: { sourceConfigDir: { type: "string" } } }] } } } },
         responses: { "201": { description: "Native configuration imported into a managed or external Environment" }, ...errorResponses("400", "401", "409", "413", "415", "422") },
+      },
+    },
+    "/environment-templates": {
+      get: {
+        operationId: "listEnvironmentTemplates",
+        responses: {
+          "200": {
+            description: "Immutable config-only Environment templates",
+            content: { "application/json": { schema: { type: "object", required: ["templates"], properties: { templates: { type: "array", items: { $ref: "#/components/schemas/EnvironmentTemplate" } } } } } },
+          },
+          ...errorResponses("401", "422"),
+        },
+      },
+      post: {
+        operationId: "createEnvironmentTemplate",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/EnvironmentTemplateCreateRequest" } } } },
+        responses: { "201": { description: "Ready Environment archived as an immutable config-only template" }, ...errorResponses("400", "401", "404", "409", "413", "415", "422") },
+      },
+    },
+    "/environment-templates/{templateId}/apply": {
+      parameters: [{ $ref: "#/components/parameters/TemplateId" }],
+      post: {
+        operationId: "applyEnvironmentTemplate",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/EnvironmentMutationRequest" } } } },
+        responses: { "201": { description: "A new managed Environment is created from the config-only template; state, cache, sessions, and login material are empty" }, ...errorResponses("400", "401", "404", "409", "413", "415", "422") },
       },
     },
     "/environments/{environmentId}": {
@@ -212,6 +252,7 @@ export const openApiDocument = {
       RunId: { name: "runId", in: "path", required: true, schema: { type: "string" } },
       AgentId: { name: "agentId", in: "path", required: true, schema: { type: "string" } },
       EnvironmentId: { name: "environmentId", in: "path", required: true, schema: { type: "string" } },
+      TemplateId: { name: "templateId", in: "path", required: true, schema: { type: "string" } },
       RunStatus: { name: "status", in: "query", schema: { $ref: "#/components/schemas/RunStatus" } },
       ProjectId: { name: "projectId", in: "query", schema: { type: "string" } },
       ProjectPathId: { name: "projectId", in: "path", required: true, schema: { type: "string" } },
@@ -222,6 +263,34 @@ export const openApiDocument = {
     },
     schemas: {
       HealthResponse: { type: "object", required: ["healthy", "apiVersion"], properties: { healthy: { type: "boolean" }, apiVersion: { type: "string", enum: ["v1"] }, configRevision: { type: "string" } } },
+      AgentHealthReport: {
+        type: "object",
+        required: ["checkedAt", "readOnly", "isSecuritySandbox", "agents"],
+        properties: {
+          checkedAt: { type: "string", format: "date-time" },
+          readOnly: { type: "boolean", enum: [true] },
+          isSecuritySandbox: { type: "boolean", enum: [false] },
+          agents: { type: "array", items: { $ref: "#/components/schemas/AgentHealth" } },
+        },
+      },
+      AgentHealth: {
+        type: "object",
+        required: ["agentId", "enabled", "status", "lastCheckedAt", "engine", "environment", "permission", "projects", "sessions", "runs", "reasons", "recommendedActions"],
+        properties: {
+          agentId: { type: "string" },
+          enabled: { type: "boolean" },
+          status: { type: "string", enum: ["healthy", "unknown", "unhealthy"] },
+          lastCheckedAt: { type: "string", format: "date-time" },
+          engine: { type: "object", required: ["id", "adapter", "enabled", "adapterRegistered", "runtimeHealth", "status", "reasons"], properties: { id: { type: "string" }, adapter: { type: "string" }, binary: { type: "string" }, configuredVersion: { type: "string" }, enabled: { type: "boolean" }, adapterRegistered: { type: "boolean" }, runtimeHealth: { type: "string", enum: ["healthy", "unknown", "unhealthy"] }, status: { type: "string", enum: ["healthy", "unknown", "unhealthy"] }, reasons: { type: "array", items: { type: "string" } } } },
+          environment: { type: "object", required: ["id", "readiness", "drifted", "status", "reasons"], properties: { id: { type: "string" }, readiness: { type: "string", enum: ["ready", "drifted", "invalid"] }, drifted: { type: "boolean" }, status: { type: "string", enum: ["healthy", "unknown", "unhealthy"] }, manifestConfigHash: { type: "string" }, lastScannedAt: { type: "string", format: "date-time" }, reasons: { type: "array", items: { type: "string" } } } },
+          permission: { type: "object", required: ["id", "status", "allowedEnvironmentKeys", "secretReferenceNames", "isSecuritySandbox", "reasons"], properties: { id: { type: "string" }, status: { type: "string", enum: ["healthy", "unknown", "unhealthy"] }, network: { type: "string", enum: ["allow", "deny"] }, allowedEnvironmentKeys: { type: "array", items: { type: "string" } }, secretReferenceNames: { type: "array", items: { type: "string" } }, isSecuritySandbox: { type: "boolean", enum: [false] }, reasons: { type: "array", items: { type: "string" } } } },
+          projects: { type: "object" },
+          sessions: { type: "object" },
+          runs: { type: "object" },
+          reasons: { type: "array", items: { type: "string" } },
+          recommendedActions: { type: "array", items: { type: "string" } },
+        },
+      },
       Runtime: { type: "object", required: ["id", "adapter", "args", "enabled", "capabilities"], properties: { id: { type: "string" }, adapter: { type: "string" }, binary: { type: "string" }, args: { type: "array", items: { type: "string" } }, version: { type: "string" }, enabled: { type: "boolean" }, capabilities: { type: "array", items: { type: "string" } } } },
       AgentEngine: { $ref: "#/components/schemas/Runtime" },
       EnvironmentPermission: { type: "object", required: ["id", "filesystem", "environment", "network"], properties: { id: { type: "string" }, filesystem: { type: "object" }, environment: { type: "object" }, network: { type: "string", enum: ["deny", "allow"] } } },
@@ -229,8 +298,10 @@ export const openApiDocument = {
       AgentMutationRequest: { type: "object", required: ["agent", "revision", "hash"], properties: { agent: { $ref: "#/components/schemas/Agent" }, revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } },
       AgentEnvironment: { type: "object", required: ["id", "directoryMode", "launchArgs", "settings"], properties: { id: { type: "string" }, engineId: { type: "string" }, permissionId: { type: "string" }, extends: { type: "string" }, directoryMode: { type: "string", enum: ["managed", "external"] }, homeDir: { type: "string" }, configDir: { type: "string" }, stateDir: { type: "string" }, cacheDir: { type: "string" }, launchArgs: { type: "array", items: { type: "string" } }, settings: { type: "object" } } },
       EnvironmentManifest: { type: "object", required: ["manifestVersion", "environmentId", "directoryMode", "configDir", "stateDir", "cacheDir", "configHash", "scannedAt"], properties: { manifestVersion: { type: "integer", enum: [1] }, environmentId: { type: "string" }, engineId: { type: "string" }, directoryMode: { type: "string", enum: ["managed", "external"] }, homeDir: { type: "string" }, configDir: { type: "string" }, stateDir: { type: "string" }, cacheDir: { type: "string" }, configHash: { type: "string" }, scannedAt: { type: "string", format: "date-time" } } },
-      EnvironmentStatus: { type: "object", required: ["environment", "drifted", "healthy", "issues"], properties: { environment: { $ref: "#/components/schemas/AgentEnvironment" }, manifest: { $ref: "#/components/schemas/EnvironmentManifest" }, currentHash: { type: "string" }, drifted: { type: "boolean" }, healthy: { type: "boolean" }, issues: { type: "array", items: { type: "string" } } } },
+      EnvironmentStatus: { type: "object", required: ["environment", "readiness", "drifted", "healthy", "issues"], properties: { environment: { $ref: "#/components/schemas/AgentEnvironment" }, manifest: { $ref: "#/components/schemas/EnvironmentManifest" }, currentHash: { type: "string" }, readiness: { type: "string", enum: ["ready", "drifted", "invalid"] }, drifted: { type: "boolean" }, healthy: { type: "boolean" }, issues: { type: "array", items: { type: "string" } } } },
       EnvironmentMutationRequest: { type: "object", required: ["environment", "revision", "hash"], properties: { environment: { $ref: "#/components/schemas/AgentEnvironment" }, revision: { type: "string" }, hash: { type: "string" }, confirmHighRisk: { type: "boolean" } } },
+      EnvironmentTemplate: { type: "object", required: ["templateVersion", "id", "sourceEnvironmentId", "createdAt", "configHash", "skipped"], properties: { templateVersion: { type: "integer", enum: [1] }, id: { type: "string" }, sourceEnvironmentId: { type: "string" }, engineId: { type: "string" }, engineVersion: { type: "string" }, createdAt: { type: "string", format: "date-time" }, configHash: { type: "string" }, skipped: { type: "array", items: { type: "object", required: ["category", "count"], properties: { category: { type: "string" }, count: { type: "integer", minimum: 1 } } } } } },
+      EnvironmentTemplateCreateRequest: { type: "object", required: ["templateId", "sourceEnvironmentId"], properties: { templateId: { type: "string" }, sourceEnvironmentId: { type: "string" } } },
       Session: { type: "object", required: ["id", "engineId", "resumable", "status", "createdAt", "updatedAt"], properties: { id: { type: "string" }, projectId: { type: "string" }, agentId: { type: "string" }, engineId: { type: "string" }, environmentId: { type: "string" }, runtimeSessionId: { type: "string" }, resumable: { type: "boolean" }, status: { type: "string", enum: ["active", "archived"] }, createdAt: { type: "string", format: "date-time" }, updatedAt: { type: "string", format: "date-time" } } },
       CreateSessionRequest: { type: "object", properties: { agentId: { type: "string" }, projectId: { type: "string" } } },
       Project: { type: "object", required: ["id", "rootDir", "agentIds"], properties: { id: { type: "string" }, rootDir: { type: "string" }, agentIds: { type: "array", items: { type: "string" } }, defaultAgentId: { type: "string" }, environmentIds: { type: "array", items: { type: "string" } }, defaultEnvironmentId: { type: "string" } } },

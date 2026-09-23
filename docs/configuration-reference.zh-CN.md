@@ -39,6 +39,8 @@
 
 Agent 原生配置目录是 Environment 的事实来源。AgentDock 管理目录引用、manifest、配置 hash、rescan、备份和恢复，但不把每种 Agent 的全部配置字段复制为平台字段。配置目录、状态目录、缓存目录和 Secret 必须分开；配置目录也不等价于 OS/容器级安全沙箱。
 
+Environment 的 copy、import、backup、restore 均是 config-only 操作；import 的目标必须为 managed Environment，已有原生 home 应创建 external Environment 直接引用。普通 config、skills、plugins、commands 可以保留，但 `.env`、token/OAuth/credentials、session/history、SQLite/WAL、cache、log、state 与符号链接一律排除。每次操作会向 AgentDock 控制目录（默认 `.agentdock`）中的 `environment-audit.jsonl` 写入不含路径、文件内容或 secret 值的 hash、排除类别/数量与结果摘要。
+
 本版本只接受新的 `engines`、`environments`、`environmentPermissions` 配置模型。旧的 `runtimes`、`profiles`、`policies` 根字段会被严格 schema 拒绝；这是一次有意的破坏性配置替换。`.agentdock` 下的 SQLite、历史 Run 和 Agent 原生目录仍会保留，不会因配置替换被删除。
 
 Environment 权限（内部仍由 Policy 类型执行）当前强制目录根、是否允许写入、环境变量白名单和网络策略。环境变量中的 secret 只保存 reference，例如：

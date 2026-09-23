@@ -1,187 +1,76 @@
 # AgentDock
 
 [![CI](https://github.com/parkerluxu/AgentDock/actions/workflows/ci.yml/badge.svg)](https://github.com/parkerluxu/AgentDock/actions/workflows/ci.yml)
-[![GitHub stars](https://img.shields.io/github/stars/parkerluxu/AgentDock?style=flat)](https://github.com/parkerluxu/AgentDock/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/parkerluxu/AgentDock?style=flat)](https://github.com/parkerluxu/AgentDock/network/members)
-[![Last commit](https://img.shields.io/github/last-commit/parkerluxu/AgentDock?style=flat)](https://github.com/parkerluxu/AgentDock/commits/main)
 [![Node.js 22.5+](https://img.shields.io/badge/Node.js-22.5%2B-339933?logo=node.js&logoColor=white&style=flat)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white&style=flat)](https://www.typescriptlang.org/)
 
-[English README](README.md) · [中文 README](README.zh-CN.md) · [English Wiki](docs/wiki/en/index.md) · [API Reference](docs/api-reference.zh-CN.md) · [Security](docs/wiki/security.md)
+[English Wiki](docs/wiki/en/index.md) · [中文 README](README.zh-CN.md) · [中文 Wiki](docs/wiki/index.md) · [DSH plugin guide](docs/wiki/en/dsh.md)
 
-## About
+AgentDock is a local-first control plane for organizing existing local Codex, Claude Code, and other Agent CLIs into routable Agents. It manages their Environments, Projects, permission policies, Sessions, and auditable execution history.
 
-AgentDock is a local-first control plane for managing multiple AI Agent Engines, isolated Environments, Projects, Sessions and auditable Runs on the machine where the Agent CLIs are installed.
-
-It is a companion to local Agent tools, not a replacement for them. It provides discovery, deterministic routing, configuration isolation, immutable execution snapshots, a loopback HTTP API, a built-in Control Center and local Adapter lifecycle management.
-
-## Project tags
-
-[![local-first](https://img.shields.io/badge/local--first-2563EB?style=flat-square)](docs/wiki/architecture.md)
-[![ai-agents](https://img.shields.io/badge/ai--agents-7C3AED?style=flat-square)](docs/wiki/index.md)
-[![agent-environments](https://img.shields.io/badge/agent--environments-0891B2?style=flat-square)](docs/wiki/environments.md)
-[![multi-agent](https://img.shields.io/badge/multi--agent-0F766E?style=flat-square)](docs/wiki/workflows.md)
-[![codex](https://img.shields.io/badge/Codex-111827?style=flat-square)](docs/wiki/configuration.md)
-[![claude-code](https://img.shields.io/badge/Claude%20Code-D97706?style=flat-square)](docs/wiki/configuration.md)
-[![developer-tools](https://img.shields.io/badge/developer--tools-475569?style=flat-square)](docs/wiki/cli.md)
-[![typescript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square)](https://www.typescriptlang.org/)
-[![node.js](https://img.shields.io/badge/Node.js-339933?style=flat-square)](https://nodejs.org/)
-[![cli](https://img.shields.io/badge/CLI-1D4ED8?style=flat-square)](docs/wiki/cli.md)
-[![http-api](https://img.shields.io/badge/HTTP%20API-DB2777?style=flat-square)](docs/wiki/api.md)
-[![sse](https://img.shields.io/badge/SSE-9333EA?style=flat-square)](docs/sdk-client.zh-CN.md)
-[![sqlite](https://img.shields.io/badge/SQLite-0F766E?style=flat-square)](docs/wiki/architecture.md)
-
-## At a glance
-
-| Capability | Description |
-| --- | --- |
-| Local-first control plane | Manage installed Agent CLIs on the local machine |
-| Engine, Agent, Environment, Permission and Project model | Make routing, configuration and policy boundaries explicit |
-| CLI, loopback HTTP API, SSE and zero-dependency Node SDK | Integrate from shells, scripts, IDEs and local tools |
-| Immutable Run snapshots, ordered events and SQLite persistence | Keep an auditable record of each execution |
-| Control Center | Inspect history, configuration and diagnostics |
-
-## Boundaries
-
-AgentDock keeps Agent configuration and state in named Environments and enforces application-level permission checks. Adapter permissions are declarations and lifecycle checks, not OS or container sandboxing. The API listens only on `127.0.0.1` / `::1`, requires a local Bearer token and is intended for same-machine integrations, not public or remote hosting.
+It complements rather than replaces Agent CLIs. The core provides a command-line interface, a loopback-only HTTP API, a Control Center, and SQLite history. The optional DSH plugin makes enabled AgentDock Agents available in the DeepSeek Harness model picker.
 
 ## Quick start
 
-Install Node.js `>=22.5`, then install dependencies and build the CLI:
-
-```text
-npm ci
-npm run build
-npm run config:validate -- examples/config.example.json
-node dist/cli.js doctor --config examples/config.example.json
-```
-
-Preview a safe execution plan without starting an Agent:
-
-```text
-node dist/cli.js run dry-run --config examples/config.example.json --project agentdock "inspect the repository"
-```
-
-For the full CLI, API, Environment, Adapter and troubleshooting walkthrough, read the [AgentDock project Wiki](docs/wiki/index.md) or [English Wiki](docs/wiki/en/index.md).
-
-## Development
-
-```text
-npm ci
-npm run typecheck
-npm test
-npm run build
-```
-
-`npm run build` compiles `src/` into `dist/` and produces the runnable `dist/cli.js` entrypoint. For a complete walkthrough covering configuration, CLI workflows, local API deployment, Environment management, Adapter development, security boundaries and troubleshooting, see the [AgentDock project Wiki](docs/wiki/index.md).
-
-### Build and local deployment
-
-Use the following sequence after a fresh checkout or a TypeScript change:
-
-```text
-npm ci
-npm run typecheck
-npm test
-npm run build
-npm run config:validate -- examples/config.example.json
-node dist/cli.js doctor --config examples/config.example.json
-```
-
-Start the loopback-only API from the build output:
-
-```text
-node dist/cli.js api serve --config examples/config.example.json --port 4177
-```
-
-Open `http://127.0.0.1:4177/` for the Control Center. The startup JSON prints the API base URL and, when no explicit token is supplied, the generated local `api-token` file path. To provide a stable token explicitly, use `--api-token <token>` or set `AGENTDOCK_API_TOKEN`. The API is intentionally restricted to `127.0.0.1`/`::1`; it is for same-machine integrations and is not a remote deployment endpoint. Use `--port 0` to let the operating system select an available port.
-
-On PowerShell, an explicit token can be supplied with:
+You need Node.js `>=22.5` and npm. Echo is built in, so this first run needs no model CLI or AI service login.
 
 ```powershell
-$env:AGENTDOCK_API_TOKEN = "replace-with-a-long-local-token"
-node dist/cli.js api serve --config examples/config.example.json --port 4177
+npm ci
+npm run build --workspace agentdock
+node .\packages\core\dist\cli.js config validate .\packages\core\examples\config.quickstart.json
+node .\packages\core\dist\cli.js run dry-run --config .\packages\core\examples\config.quickstart.json --agent echo-agent --project agentdock-demo "Hello, AgentDock"
+node .\packages\core\dist\cli.js run execute --config .\packages\core\examples\config.quickstart.json --agent echo-agent --project agentdock-demo "Hello, AgentDock"
 ```
 
-### Build the Wiki website
+The first execution writes its Run data and managed starter Environment under `.agentdock/quickstart-data/`. Echo only returns the input; it does not call a model. For real Agents, the Control Center, and a step-by-step walkthrough, see the [Getting started Wiki](docs/wiki/en/getting-started.md).
 
-The Wiki is a VitePress site backed by multiple Markdown pages under `docs/wiki/`:
+## Installation
+
+The current repository supports building and running from source. After checking it out, run `npm ci` at the repository root. To use the CLI, run `npm run build --workspace agentdock`; its entrypoint is `packages/core/dist/cli.js`. To make `agentdock` available from any directory, run `npm pack --workspace agentdock`, then install the local tarball printed by npm with `npm install --global <tarball>`.
+
+DSH is a separate optional plugin. From the repository root, run `npm pack --workspace @agentdock/dsh`, then install the resulting `agentdock-dsh-*.tgz` with `npx @deepseek-ai/dsh plugin --profile web add -w <tarball>`. See the [DSH plugin guide](docs/wiki/en/dsh.md) for the full install, configuration, token, startup, and uninstall flow.
+
+## Main components
+
+| Component | Purpose |
+| --- | --- |
+| Engine | An executable Runtime/Adapter such as `codex`, `claude-code`, or built-in `echo`. |
+| Agent | A selectable work unit that binds one Engine, Environment, and Permission. |
+| Environment | The Agent's native home/config/state/cache, separate from the project working directory. |
+| Project | Defines the working directory (`rootDir`), allowed Agents, and default Agent. |
+| Permission | Application-level filesystem, network, and environment-variable policy—not an OS sandbox. |
+| Session / Run | A Session keeps reusable conversation context; a Run is one task with a frozen config snapshot, events, and status. |
+| CLI / API / Control Center | Interfaces for terminals, same-machine scripts/integrations, and a browser UI. The API listens only on loopback. |
+
+See the Wiki's [architecture and source map](docs/wiki/en/architecture.md) for object relationships and folder responsibilities.
+
+## Repository map
 
 ```text
-npm run wiki:dev       # local authoring server with hot reload
-npm run wiki:build     # static site output: docs/wiki/.vitepress/dist/
-npm run wiki:preview   # serve the generated static site locally
+packages/core/src/       Core CLI, API, routing, runtime, policy, Environment, storage
+packages/core/examples/  Sample configs, built-in Echo starter config, API client
+packages/dsh/src/        DeepSeek Harness plugin source
+docs/                    Project, configuration, API, development, and release docs
+docs/wiki/               Chinese and English VitePress Wiki
+.agentdock/              Local runtime data (config, DB, Environments, tokens, etc.)
 ```
 
-The generated `docs/wiki/.vitepress/dist/` directory can be copied to any static file server. The Wiki build is independent from the AgentDock TypeScript build; run both when preparing a release.
+## Documentation
 
-Validate a configuration file:
+- [Install and quick start](docs/wiki/en/getting-started.md): build, run Echo, optional global install, and component map.
+- [Architecture and concepts](docs/wiki/en/architecture.md): object relationships, request flow, and source folders.
+- [Configuration](docs/wiki/en/configuration.md): Engines, Agents, Environments, Projects, and Permissions.
+- [DeepSeek Harness plugin](docs/wiki/en/dsh.md): pack, install, configure, start, and uninstall the DSH plugin.
+- [CLI](docs/wiki/en/cli.md), [local API](docs/wiki/en/api.md), [Environment management](docs/wiki/en/environments.md), and [security](docs/wiki/en/security.md).
+
+## Development and Wiki
+
+The root `npm run build` builds both the core and DSH workspaces. The Wiki is built separately:
 
 ```text
-npm run config:validate -- .agentdock/config.json
+npm run wiki:dev
+npm run wiki:build
+npm run wiki:preview
 ```
 
-List configured Engines and check their installed versions:
-
-```text
-npm run build
-node dist/cli.js engine list --config examples/config.example.json
-node dist/cli.js engine health claude-code --config examples/config.example.json
-node dist/cli.js engine health codex --config examples/config.example.json
-node dist/cli.js doctor --config examples/config.example.json
-```
-
-Manage local Adapter packages. Installation is disabled by default; an Adapter with manifest permissions must be enabled with explicit grants:
-
-```text
-node dist/cli.js adapter install ./path/to/adapter --config examples/config.example.json
-node dist/cli.js adapter list --config examples/config.example.json
-node dist/cli.js adapter enable example --grant filesystem.read --config examples/config.example.json
-node dist/cli.js adapter disable example --config examples/config.example.json
-node dist/cli.js adapter uninstall example --config examples/config.example.json
-```
-
-Preview a resolved execution without starting an Agent:
-
-```text
-node dist/cli.js run dry-run --config examples/config.example.json --project agentdock "inspect the repository"
-```
-
-`run execute` emits JSONL events and persists the Run, immutable execution snapshot, Session mapping and ordered events to local SQLite. It starts a real Agent and may consume model quota:
-
-```text
-node dist/cli.js run execute --config examples/config.example.json --environment claude-code-home "summarize the repository"
-```
-
-Inspect persisted execution data or create a reusable session:
-
-```text
-node dist/cli.js run list --config examples/config.example.json
-node dist/cli.js run show --config examples/config.example.json <run-id>
-node dist/cli.js run events --config examples/config.example.json <run-id>
-node dist/cli.js run export --format jsonl --config examples/config.example.json <run-id>
-node dist/cli.js session create --config examples/config.example.json --environment claude-code-home
-node dist/cli.js session list --config examples/config.example.json
-node dist/cli.js environment list --config examples/config.example.json
-node dist/cli.js project show --config examples/config.example.json agentdock
-```
-
-Start the loopback-only local HTTP API for scripts or IDE integrations:
-
-```text
-node dist/cli.js api serve --config examples/config.example.json --port 4177
-```
-
-Open `http://127.0.0.1:4177/` in a browser for the Control Center. It shows Agent Engine, Project, Session and Run history, including immutable Run snapshots and event timelines. The single Configuration center edits Agent, Agent Engine, Agent Environment, Project and Environment Permission entities through forms or the advanced JSON editor. Project bindings use selectable Agents and Environments, so IDs do not need to be typed manually. Changes are validated, previewed with a diff and dry-run, protected by revision/hash conflict detection, saved atomically with backups, and hot-reloaded when the change is safe. The API also watches the configuration file for external edits; invalid changes leave the last valid runtime active. A data directory change still requires an API restart because the existing SQLite store cannot move while the server is running. The UI supports Chinese and English switching; it follows the browser language on first use and remembers a manual choice in browser local storage. Enter the local Bearer token from the API startup output; the token is kept only in the browser's local storage. It does not start or cancel Runs.
-
-The API supports direct Agent invocation over one SSE connection (`POST /agents/{agentId}/invoke`), as well as asynchronous Run submission, query, cancellation, resumable SSE events and deterministic Agent routing at `/api/v1`. It deliberately listens only on `127.0.0.1`/`::1`, requires a local Bearer token, persists idempotency keys in SQLite and applies request/Run concurrency limits; see the [API reference](docs/api-reference.zh-CN.md) for endpoint and security details. The zero-dependency Node client is documented in the [local SDK guide](docs/sdk-client.zh-CN.md).
-
-AgentDock uses the built-in `node:sqlite` module. It requires Node.js 22.5 or newer; the module currently emits Node's experimental-feature warning.
-
-`dataDir` is a directory, relative to the configuration file. AgentDock stores its SQLite database at `<dataDir>/agentdock.db` (or `.agentdock/data/agentdock.db` by default). Development builds that previously created a database directly at `dataDir` remain readable without moving or deleting data.
-
-See [the requirements analysis](docs/requirements-analysis.zh-CN.md) and [the development plan](docs/development-plan.zh-CN.md) for scope and milestones.
-Configuration details are in [the configuration reference](docs/configuration-reference.zh-CN.md); API and SDK upgrades are covered by the [migration guide](docs/migration-guide.zh-CN.md).
-The deterministic [example Adapter](examples/adapter-echo/README.md) can be installed without model access.
-The [local API client example](examples/api-client/README.md) invokes an Agent and consumes its SSE stream using only Node.js built-ins.
-For continuing development in a new Codex session, start with the [session handoff](docs/next-session-handoff.zh-CN.md).
+Static Wiki output is written to `docs/wiki/.vitepress/dist/`. AgentDock requires Node.js `>=22.5`; its application-level permissions are not OS/container isolation. See the [development plan](docs/local-agent-environment-development-plan.zh-CN.md) and [release checklist](docs/release-checklist.zh-CN.md) for more technical detail.

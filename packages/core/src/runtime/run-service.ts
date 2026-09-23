@@ -6,6 +6,8 @@ import type { ExecutionContext, Run, RunEvent, RunRouteSnapshot, RunStatus } fro
 import { redactSensitiveValue, type RedactionOptions } from "../core/redaction.js";
 import { SqliteRunStore } from "../storage/sqlite-run-store.js";
 import { EnvironmentSecretResolver, type SecretResolver } from "../secrets/resolver.js";
+import { SessionNotFoundError } from "../core/errors.js";
+import { assertSessionIdentity } from "./session-service.js";
 
 export interface ExecuteRunOptions {
   context: ExecutionContext;
@@ -29,19 +31,12 @@ export class RunService {
 
   public async *execute(options: ExecuteRunOptions): AsyncIterable<{ run: Run; event: RunEvent }> {
     const existingSession = options.sessionId ? this.store.getSession(options.sessionId) : undefined;
-    if (options.sessionId && !existingSession) throw new Error(`Session "${options.sessionId}" was not found.`);
-    if (existingSession && existingSession.engineId !== options.context.engine.id) {
-      throw new Error(`Session "${existingSession.id}" belongs to Engine "${existingSession.engineId}", not "${options.context.engine.id}".`);
-    }
-    if (existingSession?.agentId && existingSession.agentId !== options.context.agent?.id) {
-      throw new Error(`Session "${existingSession.id}" belongs to Agent "${existingSession.agentId}", not "${options.context.agent?.id ?? "the selected Agent"}".`);
-    }
-    if (existingSession?.environmentId && existingSession.environmentId !== options.context.agentEnvironment.id) {
-      throw new Error(`Session "${existingSession.id}" belongs to Environment "${existingSession.environmentId}", not "${options.context.agentEnvironment.id}".`);
-    }
-    if (existingSession?.status !== undefined && existingSession.status !== "active") {
-      throw new Error(`Session "${existingSession.id}" is archived and cannot accept a new Run.`);
-    }
+    if (options.sessionId && !existingSession) throw new SessionNotFoundError(options.sessionId);
+    if (existingSession) assertSessionIdentity(existingSession, {
+      agentId: options.context.agent?.id,
+      engineId: options.context.engine.id,
+      environmentId: options.context.agentEnvironment.id,
+    });
     const resolvedSecrets = this.secretResolver.resolve(options.context.secretReferences);
     const sensitiveValues = [...(options.sensitiveValues ?? []), ...Object.values(resolvedSecrets)];
     let session = existingSession;

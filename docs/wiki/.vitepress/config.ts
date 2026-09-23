@@ -30,6 +30,7 @@ const zhTheme = {
       items: [
         { text: "本地 API 与 Control Center", link: "/api" },
         { text: "Environment 管理", link: "/environments" },
+        { text: "运行时兼容矩阵", link: "/runtime-compatibility" },
         { text: "Adapter 开发与安装", link: "/adapters" },
         { text: "DeepSeek Harness 集成", link: "/dsh" },
       ],
@@ -38,6 +39,7 @@ const zhTheme = {
       text: "运维参考",
       items: [
         { text: "从源码构建与本地部署", link: "/build-and-deploy" },
+        { text: "发布就绪与恢复演练", link: "/release-readiness" },
         { text: "数据、权限与安全", link: "/security" },
         { text: "故障排查", link: "/troubleshooting" },
       ],
@@ -76,6 +78,7 @@ const enTheme = {
       items: [
         { text: "Local API & Control Center", link: "/en/api" },
         { text: "Environment management", link: "/en/environments" },
+        { text: "Runtime compatibility", link: "/en/runtime-compatibility" },
         { text: "Adapter development", link: "/en/adapters" },
         { text: "DeepSeek Harness integration", link: "/en/dsh" },
       ],
@@ -84,6 +87,7 @@ const enTheme = {
       text: "Operations",
       items: [
         { text: "Build & local deployment", link: "/en/build-and-deploy" },
+        { text: "Release readiness & recovery", link: "/en/release-readiness" },
         { text: "Data, permissions & security", link: "/en/security" },
         { text: "Troubleshooting", link: "/en/troubleshooting" },
       ],

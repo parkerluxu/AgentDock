@@ -42,6 +42,7 @@ Authorization: Bearer <api-token>
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | API 服务自身的健康检查。 |
+| `GET` | `/api/v1/agent-health` | 缓存的只读 Agent 健康摘要；不会启动 Runtime 或解析 Secret Reference。 |
 | `GET` | `/api/v1/openapi.json` | 获取当前 API v1 的 OpenAPI 3.0 schema。 |
 | `GET` | `/api/v1/engines` | 配置中的 Agent Engine 描述符。 |
 | `GET` | `/api/v1/agents` | 对外可调用的 Agent 及其 Engine、Environment、Permission 绑定。 |
@@ -52,11 +53,14 @@ Authorization: Bearer <api-token>
 | `POST` | `/api/v1/environments/:environmentId/rescan` | 重新扫描配置目录并更新 manifest/hash。 |
 | `POST` | `/api/v1/environments/:environmentId/copy` | 复制配置目录到新的 managed Environment。 |
 | `POST` | `/api/v1/environments/import` | 从现有目录导入 Environment 配置。 |
+| `GET/POST` | `/api/v1/environment-templates` | 列出或从 ready Environment 创建不可变 config-only 模板。 |
+| `POST` | `/api/v1/environment-templates/:templateId/apply` | 提交新的 managed Environment 定义并从模板派生；state、cache、session 和登录材料不会复制。 |
 | `GET/POST` | `/api/v1/environments/:environmentId/backups` | 列出或创建 Environment 配置备份。 |
 | `POST` | `/api/v1/environments/:environmentId/restore` | 恢复 Environment 配置备份。 |
 | `GET` | `/api/v1/sessions` | 本地 Session 列表。 |
 | `GET` | `/api/v1/projects` | 配置中的 Project 列表。 |
 | `PUT` | `/api/v1/projects/:projectId/agents` | 原子更新 Project 可调用的 Agent 列表和默认 Agent。 |
+| `POST` | `/api/v1/routing/preview` | 只读预览请求路由、候选 Agent 和每个拒绝原因；绝不创建 Run。 |
 | `GET` | `/api/v1/config` | 获取配置快照、revision 和 hash。 |
 | `POST` | `/api/v1/config/preview` | 校验候选配置并返回 Policy、dry-run、风险和差异预览。 |
 | `PUT` | `/api/v1/config` | 按 revision/hash 原子保存配置；安全变更会热加载，响应会说明是否仍需重启。 |
@@ -67,6 +71,18 @@ Authorization: Bearer <api-token>
 | `GET` | `/api/v1/runs/:runId` | 获取 Run 与不可变执行快照。 |
 | `POST` | `/api/v1/runs/:runId/cancel` | 请求取消本 API 进程正在管理的 Run。 |
 | `GET` | `/api/v1/runs/:runId/events` | 获取历史事件 JSON，或通过 SSE 订阅事件。 |
+
+## 路由预览
+
+`POST /api/v1/routing/preview` 使用与创建 Run 相同的 JSON 请求体（至少包含 `task`，也可带 `agentId`、`environmentId`、`projectId`、能力与 Permission 要求），但不创建或执行 Run。它始终返回 `200`、`executes: false` 和 `routing`：可路由时包含选中的 Agent、Environment、Project、Permission 及候选列表；不可路由或 Environment 尚未 ready 时还返回顶层 `error`。`routing.candidates` 保留候选的 `agentId`、`accepted` 与 `reasons`，以便调用方解释为什么没有选中某个 Agent。
+
+它适合在自动化真正提交 `POST /api/v1/runs` 前展示选择结果。预览不会刷新 Environment manifest；若响应为 `ENVIRONMENT_RESCAN_REQUIRED` 或 `ENVIRONMENT_DIRECTORY_INVALID`，先修复目录或执行 rescan，再发起真正的 Run。
+
+## Agent 健康摘要
+
+`GET /api/v1/agent-health` 返回每个 Agent 的 Engine、Environment、Permission、Project binding、最近 Session 和 Run 摘要，以及 `lastCheckedAt`、原因与下一步操作。结果短时间缓存；读取只检查本地配置、Environment manifest/目录与 SQLite 元数据，不调用 Adapter 的 `healthCheck()`、不启动 Runtime、也不解析 secret 值。`engine.runtimeHealth: "unknown"` 表示尚未显式探测；需要版本和可执行性检查时使用 `engine health <engine-id>`，而不是把 `unknown` 当成 `healthy`。
+
+`environment.readiness` 会明确显示 `ready`、`drifted` 或 `invalid`；Project 根目录缺失、Adapter 未注册、Environment 漂移或 Session 不可恢复都会带原因和推荐操作。响应始终包含 `isSecuritySandbox: false`：Environment Permission 是启动约束和审计依据，不是操作系统级隔离。
 
 ## 调用 Agent（推荐）
 
@@ -174,6 +190,8 @@ Authorization: Bearer <api-token>
 ```
 
 常见状态码包括：`400`（输入、JSON、查询参数错误）、`401`（缺少或无效 token）、`404`（资源不存在）、`406`（Agent 调用未声明 SSE）、`409`（幂等冲突、路由冲突、Session 已归档、Runtime 不匹配或 Run 不可取消）、`413`（请求体超过 64 KiB）、`415`（非 JSON 创建请求）、`429`（请求或 Run 并发达到上限）。路由错误的 `error.details.candidates` 会列出每个候选及拒绝原因。默认请求读取超时为 30 秒，默认最多同时管理 4 个 Run 和 32 个 HTTP 请求；可在嵌入 API 时通过服务选项调整。
+
+恢复 Session 时，以下 `error.code` 是稳定的机器契约：`SESSION_AGENT_MISMATCH`、`SESSION_ENGINE_MISMATCH`、`SESSION_ENVIRONMENT_MISMATCH` 和 `SESSION_ARCHIVED`（均为 `409`）；不存在的 Session 返回 `404 SESSION_NOT_FOUND`。SDK 会将该 code 暴露为 `AgentDockClientError.code`，CLI 则在 stderr 输出 `{ "error": { "code", "message" } }` JSON。
 
 API 仍然只监听回环地址，token 是同机进程边界的最小认证措施，不等价于 OS/容器沙箱，也未提供 TLS 或远程身份管理。不要通过端口转发、反向代理或防火墙规则把它暴露给其他主机。服务会对运行事件和 API 错误响应做 token 脱敏；SSE 客户端断开会释放连接配额，过慢且持续无法排空的连接会被关闭。
 

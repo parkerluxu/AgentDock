@@ -6,19 +6,21 @@ import { basename, dirname, join, resolve } from "node:path";
 import { ConfigValidationError, loadConfig } from "../config/load.js";
 import { configHash, ConfigEditor, ConfigEditorError, type ConfigDryRunRequest, type ConfigPreview, type ConfigSaveResult } from "../config/editor.js";
 import type { AgentDockConfig } from "../config/schema.js";
-import type { NetworkPolicy, Run, RunEvent, RunRouteSnapshot, RunStatus, RuntimeCapability } from "../core/types.js";
+import type { EnvironmentManifest, NetworkPolicy, Run, RunEvent, RunRouteSnapshot, RunStatus, RuntimeCapability } from "../core/types.js";
+import { AgentDockError, SessionNotFoundError } from "../core/errors.js";
 import { redactSensitiveValue, type RedactionOptions } from "../core/redaction.js";
 import { AgentDockLogger, type Logger } from "../core/logger.js";
-import { resolveExecutionContext } from "../policy/resolver.js";
+import { formatDryRun, resolveExecutionContext } from "../policy/resolver.js";
 import { configBaseDirectory, configDataPath } from "../runtime/configuration.js";
+import { AgentHealthReadModel } from "../runtime/agent-health.js";
 import { createBuiltinRuntimeRegistry, createConfiguredRuntimeRegistry, type RuntimeRegistry } from "../runtime/registry.js";
 import { RunService } from "../runtime/run-service.js";
-import { SessionService } from "../runtime/session-service.js";
+import { assertSessionIdentity, SessionService } from "../runtime/session-service.js";
 import { SqliteRunStore } from "../storage/sqlite-run-store.js";
-import { resolveRoute, RouteResolutionError, type RuntimeHealthStatus } from "../runtime/router.js";
+import { explainRoute, resolveRoute, RouteResolutionError, type RuntimeHealthStatus } from "../runtime/router.js";
 import { openApiDocument } from "./openapi.js";
 import { webAppHtml } from "../web/index.js";
-import { EnvironmentDirectoryManager, EnvironmentManagerError, readEnvironmentManifestSync } from "../environment/manager.js";
+import { EnvironmentDirectoryManager, EnvironmentManagerError, type EnvironmentRunLock, type EnvironmentTemplate, readEnvironmentManifestSync } from "../environment/manager.js";
 import { configuredAgents, environmentCatalog } from "../config/model.js";
 
 const API_PREFIX = "/api/v1";
@@ -83,6 +85,7 @@ interface IdempotencyReservation {
 
 interface ActiveRun {
   controller: AbortController;
+  environmentLock?: EnvironmentRunLock;
   completion?: Promise<void>;
 }
 
@@ -111,7 +114,7 @@ class LocalRunManager {
   private readonly pendingControllers = new Set<AbortController>();
   private readonly startOperations = new Set<Promise<{ run: Run; created: boolean }>>();
   private readonly pendingIdempotentStarts = new Map<string, PendingIdempotentStart>();
-  private readonly environmentScans = new Map<string, Promise<void>>();
+  private readonly environmentScans = new Map<string, Promise<EnvironmentManifest>>();
   private pendingStarts = 0;
   private closing = false;
 
@@ -186,6 +189,7 @@ class LocalRunManager {
     const runConfig = this.config;
     const runRegistry = this.registry;
     const runRedaction = this.redaction;
+    let environmentLock: EnvironmentRunLock | undefined;
     try {
       const routing = resolveRoute(runConfig, {
         ...(input.agentId ? { agentId: input.agentId } : {}),
@@ -198,9 +202,13 @@ class LocalRunManager {
         },
         ...(this.engineHealth ? { engineHealth: this.engineHealth } : {}),
       });
-      // Freeze a freshly scanned native configuration in the Run snapshot.
-      // This creates only AgentDock-managed metadata/directories and never clears state/cache.
-      await this.ensureEnvironmentReady(runConfig, routing.environmentId);
+      // Freeze only an explicitly confirmed native configuration in the Run
+      // snapshot. The manager permits initial managed-directory creation but
+      // never silently accepts existing or drifted configuration.
+      const runId = reservation?.runId ?? randomUUID();
+      const manifest = await this.ensureEnvironmentReady(runConfig, routing.environmentId);
+      const environmentManager = new EnvironmentDirectoryManager(runConfig, configBaseDirectory(this.configPath));
+      environmentLock = environmentManager.acquireRunLock(routing.environmentId, runId, manifest.configHash);
       const context = resolveExecutionContext({
         config: runConfig,
         baseDirectory: configBaseDirectory(this.configPath),
@@ -210,7 +218,6 @@ class LocalRunManager {
       });
       if (input.sessionId) this.validateSession(input.sessionId, context.agent?.id, context.engine.id, context.agentEnvironment.id);
 
-      const runId = reservation?.runId ?? randomUUID();
       const iterator = this.runService.execute({
         context,
         task: input.task,
@@ -228,11 +235,12 @@ class LocalRunManager {
       this.pendingStarts -= 1;
       startPending = false;
       this.publish(first.value.event);
-      const active: ActiveRun = { controller };
+      const active: ActiveRun = { controller, environmentLock };
       this.activeRuns.set(runId, active);
       active.completion = this.consume(runId, iterator);
       return { run: first.value.run, created: true };
     } catch (error) {
+      environmentLock?.release();
       if (startPending) this.pendingStarts -= 1;
       if (reservation) this.store.releaseIdempotencyKey(reservation.key, reservation.runId);
       throw error;
@@ -241,19 +249,16 @@ class LocalRunManager {
     }
   }
 
-  private async ensureEnvironmentReady(config: AgentDockConfig, environmentId: string): Promise<void> {
+  private async ensureEnvironmentReady(config: AgentDockConfig, environmentId: string): Promise<EnvironmentManifest> {
     const key = `${configHash(config)}:${environmentId}`;
     const existing = this.environmentScans.get(key);
     if (existing) return existing;
-    const operation = (async (): Promise<void> => {
+    const operation = (async (): Promise<EnvironmentManifest> => {
       const directories = new EnvironmentDirectoryManager(config, configBaseDirectory(this.configPath));
-      const status = await directories.inspect(environmentId);
-      if (status.drifted) throw new ApiRequestError(409, "ENVIRONMENT_RESCAN_REQUIRED", `Environment "${environmentId}" changed outside AgentDock. Rescan it before running.`);
-      if (!status.manifest) await directories.rescan(environmentId);
-      else if (!status.healthy) throw new ApiRequestError(422, "ENVIRONMENT_DIRECTORY_INVALID", status.issues.join("; "));
+      return directories.prepareForRun(environmentId);
     })();
     this.environmentScans.set(key, operation);
-    try { await operation; } finally { this.environmentScans.delete(key); }
+    try { return await operation; } finally { this.environmentScans.delete(key); }
   }
 
   private reserveIdempotency(key: string, requestHash: string): IdempotencyReservation & { status: "created" | "existing" | "in_progress" | "conflict" } {
@@ -304,17 +309,19 @@ class LocalRunManager {
       this.logger.error("adapter_execution_failed", { runId });
       this.recoverUnexpectedFailure(runId);
     } finally {
+      const active = this.activeRuns.get(runId);
       const run = this.store.getRun(runId);
       if (run) {
         try {
           const manager = new EnvironmentDirectoryManager(this.config, configBaseDirectory(this.configPath));
-          const refreshed = await manager.reconcileAfterRun(run.environmentId);
+          const refreshed = await manager.reconcileAfterRun(run.environmentId, run.snapshot.environmentConfigHash, active?.environmentLock?.runId);
           if (refreshed) this.logger.info("environment_manifest_refreshed_after_run", { runId, environmentId: run.environmentId });
         } catch (error) {
           this.logger.warn("environment_manifest_refresh_failed", { runId, environmentId: run.environmentId, reason: error instanceof Error ? error.message : String(error) });
         }
         this.logger.info("run_finished", { runId, status: run.status });
       }
+      active?.environmentLock?.release();
       this.activeRuns.delete(runId);
     }
   }
@@ -346,17 +353,8 @@ class LocalRunManager {
 
   private validateSession(sessionId: string, agentId: string | undefined, engineId: string, environmentId: string): void {
     const session = this.store.getSession(sessionId);
-    if (!session) throw new ApiRequestError(404, "SESSION_NOT_FOUND", `Session "${sessionId}" was not found.`);
-    if (session.agentId && session.agentId !== agentId) {
-      throw new ApiRequestError(409, "SESSION_AGENT_MISMATCH", `Session "${sessionId}" belongs to Agent "${session.agentId}", not "${agentId ?? "the selected Agent"}".`);
-    }
-    if (session.engineId !== engineId) {
-      throw new ApiRequestError(409, "SESSION_ENGINE_MISMATCH", `Session "${sessionId}" belongs to Engine "${session.engineId}", not "${engineId}".`);
-    }
-    if (session.environmentId && session.environmentId !== environmentId) {
-      throw new ApiRequestError(409, "SESSION_ENVIRONMENT_MISMATCH", `Session "${sessionId}" belongs to Environment "${session.environmentId}", not "${environmentId}".`);
-    }
-    if (session.status !== "active") throw new ApiRequestError(409, "SESSION_ARCHIVED", `Session "${sessionId}" is archived and cannot accept a new Run.`);
+    if (!session) throw new SessionNotFoundError(sessionId);
+    assertSessionIdentity(session, { agentId, engineId, environmentId });
   }
 }
 
@@ -389,6 +387,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
     activeRedaction,
   );
   const configEditor = new ConfigEditor(options.configPath, options.config);
+  const agentHealthReadModel = new AgentHealthReadModel();
   const streams = new Set<ServerResponse>();
   const maxRequestBodyBytes = options.maxRequestBodyBytes ?? MAX_REQUEST_BODY_BYTES;
   validatePositiveInteger(maxRequestBodyBytes, "maxRequestBodyBytes");
@@ -426,6 +425,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
     activeRedaction = options.redaction ?? candidate.redaction;
     activeRevision = configHash(candidate);
     manager.updateRuntime(activeConfig, activeRegistry, activeRedaction);
+    agentHealthReadModel.invalidate();
     if (logger instanceof AgentDockLogger) logger.update({ level: candidate.logging.level, redaction: activeRedaction });
     logger.info("config_reloaded", { source, revision: activeRevision });
     return { applied: true, restartRequired: false, reasons: [] };
@@ -510,6 +510,56 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         writeJson(response, 200, { healthy: true, apiVersion: "v1", configRevision: activeRevision }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
+      if (request.method === "GET" && path === `${API_PREFIX}/agent-health`) {
+        const report = await agentHealthReadModel.read({
+          config: activeConfig,
+          configPath: options.configPath,
+          registry: activeRegistry,
+          store,
+          ...(options.engineHealth ? { engineHealth: options.engineHealth } : {}),
+        });
+        writeJson(response, 200, report, apiToken ? [apiToken] : [], activeRedaction);
+        return;
+      }
+      if (request.method === "POST" && path === `${API_PREFIX}/routing/preview`) {
+        requireJsonContentType(request);
+        const input = parseStartRunRequest(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        const routing = explainRoute(activeConfig, {
+          ...(input.agentId ? { agentId: input.agentId } : {}),
+          ...(input.environmentId ? { environmentId: input.environmentId } : {}),
+          ...(input.projectId ? { projectId: input.projectId } : {}),
+          requirements: {
+            ...(input.requiredCapabilities ? { requiredCapabilities: input.requiredCapabilities } : {}),
+            ...(input.network ? { network: input.network } : {}),
+            ...(input.filesystemWrite !== undefined ? { filesystemWrite: input.filesystemWrite } : {}),
+          },
+          ...(options.engineHealth ? { engineHealth: options.engineHealth } : {}),
+        });
+        if (!routing.resolved) {
+          writeJson(response, 200, { task: input.task, executes: false, routing, error: routing.error }, apiToken ? [apiToken] : [], activeRedaction);
+          return;
+        }
+        const { resolved: _resolved, ...routeSnapshot } = routing;
+        const directories = new EnvironmentDirectoryManager(activeConfig, configBaseDirectory(options.configPath));
+        const environment = await directories.inspect(routeSnapshot.environmentId as string);
+        if (environment.readiness !== "ready") {
+          const code = environment.readiness === "drifted" ? "ENVIRONMENT_RESCAN_REQUIRED" : "ENVIRONMENT_DIRECTORY_INVALID";
+          const message = environment.readiness === "drifted"
+            ? `Environment "${routeSnapshot.environmentId}" changed outside AgentDock. Run environment rescan before executing.`
+            : environment.issues.join("; ") || `Environment "${routeSnapshot.environmentId}" is not ready.`;
+          writeJson(response, 200, { task: input.task, executes: false, routing: routeSnapshot, environment, error: { code, message } }, apiToken ? [apiToken] : [], activeRedaction);
+          return;
+        }
+        const context = resolveExecutionContext({
+          config: activeConfig,
+          baseDirectory: configBaseDirectory(options.configPath),
+          ...(routeSnapshot.agentId ? { agentId: routeSnapshot.agentId } : {}),
+          environmentId: routeSnapshot.environmentId as string,
+          ...(input.projectId ? { projectId: input.projectId } : {}),
+        });
+        writeJson(response, 200, formatDryRun(context, input.task, routeSnapshot as RunRouteSnapshot), apiToken ? [apiToken] : [], activeRedaction);
+        return;
+      }
       if (request.method === "GET" && path === `${API_PREFIX}/sessions`) {
         writeJson(response, 200, { sessions: store.listSessions() }, apiToken ? [apiToken] : [], activeRedaction);
         return;
@@ -525,10 +575,7 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         // A session can call a native adapter's createSession hook, so it needs
         // the same safe Environment preparation as a Run.
         const directories = new EnvironmentDirectoryManager(activeConfig, configBaseDirectory(options.configPath));
-        const environment = await directories.inspect(routing.environmentId);
-        if (environment.drifted) throw new ApiRequestError(409, "ENVIRONMENT_RESCAN_REQUIRED", `Environment "${routing.environmentId}" changed outside AgentDock. Rescan it before creating a session.`);
-        if (!environment.manifest) await directories.rescan(routing.environmentId);
-        else if (!environment.healthy) throw new ApiRequestError(422, "ENVIRONMENT_DIRECTORY_INVALID", environment.issues.join("; "));
+        await directories.prepareForRun(routing.environmentId);
         const context = resolveExecutionContext({
           config: activeConfig,
           baseDirectory: configBaseDirectory(options.configPath),
@@ -767,6 +814,44 @@ export function createAgentDockApiServer(options: AgentDockApiServerOptions): Ag
         const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
         const activation = await activateConfig(result.current.config, "api");
         writeJson(response, 201, { environment: input.environment, manifest: readEnvironmentManifest(result.current.config, options.configPath, input.environment.id), ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
+        return;
+      }
+
+      if (path === `${API_PREFIX}/environment-templates`) {
+        if (request.method === "GET") {
+          const snapshot = await configEditor.snapshot();
+          const templates = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).templates();
+          writeJson(response, 200, { templates: templates.map(serializeEnvironmentTemplate) }, apiToken ? [apiToken] : [], activeRedaction);
+          return;
+        }
+        if (request.method === "POST") {
+          requireJsonContentType(request);
+          const input = parseEnvironmentTemplateCreate(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+          const snapshot = await configEditor.snapshot();
+          const template = await new EnvironmentDirectoryManager(snapshot.config, configBaseDirectory(options.configPath)).createTemplate(input.templateId, input.sourceEnvironmentId);
+          writeJson(response, 201, { template: serializeEnvironmentTemplate(template) }, apiToken ? [apiToken] : [], activeRedaction);
+          return;
+        }
+      }
+
+      const environmentTemplateApply = /^\/api\/v1\/environment-templates\/([^/]+)\/apply$/.exec(path);
+      if (request.method === "POST" && environmentTemplateApply?.[1]) {
+        requireJsonContentType(request);
+        const templateId = decodeURIComponent(environmentTemplateApply[1]);
+        const input = parseEnvironmentMutation(await readJsonBody(request, maxRequestBodyBytes, requestTimeoutMs));
+        if (input.environment.directoryMode !== "managed") throw new ApiRequestError(422, "ENVIRONMENT_DIRECTORY_INVALID", "A template can only create a managed Environment.");
+        const snapshot = await configEditor.snapshot();
+        if (environmentCatalog(snapshot.config).environments.some((item) => item.id === input.environment.id)) {
+          throw new ApiRequestError(409, "ENVIRONMENT_ALREADY_EXISTS", `Environment "${input.environment.id}" already exists.`);
+        }
+        const candidate = structuredClone(snapshot.config);
+        candidate.environments.push(input.environment);
+        const preview = await configEditor.preview(candidate);
+        const directories = new EnvironmentDirectoryManager(preview.candidate, configBaseDirectory(options.configPath));
+        const manifest = await directories.applyTemplate(templateId, input.environment.id);
+        const result = await configEditor.save(preview.candidate, input.revision, input.hash, input.confirmHighRisk);
+        const activation = await activateConfig(result.current.config, "api");
+        writeJson(response, 201, { templateId, environment: input.environment, manifest, ...serializeConfigSave(result, activation) }, apiToken ? [apiToken] : [], activeRedaction);
         return;
       }
 
@@ -1147,6 +1232,11 @@ interface EnvironmentImportRequest extends EnvironmentMutationRequest {
   sourceConfigDir: string;
 }
 
+interface EnvironmentTemplateCreateRequest {
+  templateId: string;
+  sourceEnvironmentId: string;
+}
+
 function parseEnvironmentMutation(body: unknown): EnvironmentMutationRequest {
   const input = requiredObject(body, "The Environment request body must be a JSON object.");
   const environment = requiredObject(input.environment, "The request must include an Environment object.") as unknown as AgentDockConfig["environments"][number];
@@ -1161,6 +1251,24 @@ function parseEnvironmentMutation(body: unknown): EnvironmentMutationRequest {
 function parseEnvironmentImport(body: unknown): EnvironmentImportRequest {
   const input = requiredObject(body, "The Environment import body must be a JSON object.");
   return { ...parseEnvironmentMutation(input), sourceConfigDir: requiredString(input.sourceConfigDir, "sourceConfigDir") };
+}
+
+function parseEnvironmentTemplateCreate(body: unknown): EnvironmentTemplateCreateRequest {
+  const input = requiredObject(body, "The Environment template request body must be a JSON object.");
+  return {
+    templateId: requiredString(input.templateId, "templateId"),
+    sourceEnvironmentId: requiredString(input.sourceEnvironmentId, "sourceEnvironmentId"),
+  };
+}
+
+function serializeEnvironmentTemplate(template: EnvironmentTemplate): Omit<EnvironmentTemplate, "skipped"> & { skipped: Array<{ category: string; count: number }> } {
+  const { skipped, ...summary } = template;
+  return {
+    ...summary,
+    skipped: Object.entries(skipped)
+      .map(([category, count]) => ({ category, count }))
+      .sort((left, right) => left.category.localeCompare(right.category)),
+  };
 }
 
 function parseConfigPreviewRequest(body: unknown): ConfigPreviewRequest {
@@ -1485,6 +1593,7 @@ function writeCancelResult(response: ServerResponse, result: ReturnType<LocalRun
 
 function toApiError(error: unknown): ApiRequestError {
   if (error instanceof ApiRequestError) return error;
+  if (error instanceof SessionNotFoundError) return new ApiRequestError(404, error.code, error.message);
   if (error instanceof RouteResolutionError) return new ApiRequestError(409, error.code, error.message, { candidates: error.candidates });
   if (error instanceof ConfigValidationError) return new ApiRequestError(422, "CONFIG_VALIDATION_FAILED", error.message, { issues: error.issues });
   if (error instanceof ConfigEditorError) {
@@ -1495,11 +1604,12 @@ function toApiError(error: unknown): ApiRequestError {
     return new ApiRequestError(status, error.code, error.message, error.details);
   }
   if (error instanceof EnvironmentManagerError) {
-    const status = error.code === "ENVIRONMENT_NOT_FOUND" || error.code === "ENVIRONMENT_BACKUP_NOT_FOUND" ? 404
-      : error.code === "ENVIRONMENT_EXTERNAL_CONFIRMATION_REQUIRED" ? 409
+    const status = error.code === "ENVIRONMENT_NOT_FOUND" || error.code === "ENVIRONMENT_BACKUP_NOT_FOUND" || error.code === "ENVIRONMENT_TEMPLATE_NOT_FOUND" ? 404
+      : error.code === "ENVIRONMENT_EXTERNAL_CONFIRMATION_REQUIRED" || error.code === "ENVIRONMENT_RESCAN_REQUIRED" || error.code === "ENVIRONMENT_RUN_IN_PROGRESS" || error.code === "ENVIRONMENT_TEMPLATE_EXISTS" ? 409
         : 422;
     return new ApiRequestError(status, error.code, error.message, error.details);
   }
+  if (error instanceof AgentDockError) return new ApiRequestError(409, error.code, error.message);
   return new ApiRequestError(500, "INTERNAL_ERROR", "The API request could not be completed.");
 }
 

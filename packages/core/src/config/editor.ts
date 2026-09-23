@@ -6,6 +6,8 @@ import type { AgentDockConfig } from "./schema.js";
 import { configBaseDirectory } from "../runtime/configuration.js";
 import { resolveExecutionContext, formatDryRun } from "../policy/resolver.js";
 import { environmentCatalog } from "./model.js";
+import { explainRoute } from "../runtime/router.js";
+import type { RunRouteSnapshot } from "../core/types.js";
 
 export interface ConfigSnapshot {
   config: AgentDockConfig;
@@ -397,14 +399,21 @@ function validatePolicyBindings(config: AgentDockConfig, configPath: string): Ar
 
 function runDryRun(config: AgentDockConfig, configPath: string, request: ConfigDryRunRequest): Record<string, unknown> {
   try {
-    const context = resolveExecutionContext({
-      config,
-      baseDirectory: configBaseDirectory(configPath),
+    const routing = explainRoute(config, {
       ...(request.agentId ? { agentId: request.agentId } : {}),
       ...(request.environmentId ? { environmentId: request.environmentId } : {}),
       ...(request.projectId ? { projectId: request.projectId } : {}),
     });
-    return formatDryRun(context, request.task);
+    if (!routing.resolved) return { executes: false, routing, error: routing.error?.message ?? routing.explanation };
+    const { resolved: _resolved, ...routeSnapshot } = routing;
+    const context = resolveExecutionContext({
+      config,
+      baseDirectory: configBaseDirectory(configPath),
+      ...(routeSnapshot.agentId ? { agentId: routeSnapshot.agentId } : {}),
+      ...(routeSnapshot.environmentId ? { environmentId: routeSnapshot.environmentId } : {}),
+      ...(request.projectId ? { projectId: request.projectId } : {}),
+    });
+    return formatDryRun(context, request.task, routeSnapshot as RunRouteSnapshot);
   } catch (error) {
     return { executes: false, error: error instanceof Error ? error.message : String(error) };
   }

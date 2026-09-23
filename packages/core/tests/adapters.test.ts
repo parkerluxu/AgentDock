@@ -38,6 +38,13 @@ class InspectableCodexAdapter extends CodexAdapter {
 }
 
 describe("built-in adapter command mapping", () => {
+  it("declares native-home contracts for Codex and Claude Code", () => {
+    const claude = new ClaudeCodeAdapter(runtime("claude-code", "claude"), new ProcessRunner()).manifest.nativeHome;
+    const codex = new CodexAdapter(runtime("codex", "codex"), new ProcessRunner()).manifest.nativeHome;
+    expect(claude).toMatchObject({ homeEnvironmentVariables: ["CLAUDE_CONFIG_DIR"], session: { createArgument: "--session-id <id>", resumeArgument: "--resume <id>" }, verification: "declared" });
+    expect(codex).toMatchObject({ homeEnvironmentVariables: ["CODEX_HOME"], session: { resumeArgument: "exec resume <thread-id>" }, verification: "declared" });
+  });
+
   it("maps Claude Code print, stream and resume flags", () => {
     const args = new InspectableClaudeAdapter(runtime("claude-code", "claude"), new ProcessRunner()).args(request(runtime("claude-code", "claude")));
     expect(args).toEqual(["--print", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--resume", "session-1", "inspect repository"]);

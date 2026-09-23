@@ -8,7 +8,7 @@ Control Center 是 AgentDock 自带的本地网页界面。它只负责查看状
 
 ```text
 npm run build
-node dist/cli.js api serve --config examples/config.example.json --port 4177
+node packages/core/dist/cli.js api serve --config packages/core/examples/config.example.json --port 4177
 ```
 
 浏览器打开 `http://127.0.0.1:4177/`。首次进入会看到 token 输入框，把 API 启动 JSON 中的 token（或 `api-token` 文件内容）粘贴进去即可。token 只保存在当前浏览器的 local storage，不会写入 Wiki 或 URL。

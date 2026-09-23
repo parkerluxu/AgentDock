@@ -5,14 +5,14 @@ API 基础路径是 `/api/v1`，只监听 `127.0.0.1` / `::1`。它适合同机�
 ## 启动
 
 ```text
-node dist/cli.js api serve --config examples/config.example.json --port 4177
+node packages/core/dist/cli.js api serve --config packages/core/examples/config.example.json --port 4177
 ```
 
 启动 JSON 包含 `apiBaseUrl`。未提供 `--api-token` 且未设置 `AGENTDOCK_API_TOKEN` 时，服务会在数据库同目录生成 `api-token` 文件并打印路径。显式 token 至少应为 16 个字符：
 
 ```powershell
 $env:AGENTDOCK_API_TOKEN = "replace-with-a-long-local-token"
-node dist/cli.js api serve --config examples/config.example.json --port 4177
+node packages/core/dist/cli.js api serve --config packages/core/examples/config.example.json --port 4177
 ```
 
 每次请求都带：
@@ -28,14 +28,18 @@ Authorization: Bearer <api-token>
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | `GET` | `/api/v1/health` | API 自身健康检查。 |
+| `GET` | `/api/v1/agent-health` | 缓存的只读 Agent 健康、漂移和 Project 绑定摘要；不会启动 Runtime 或读取 secret 值。 |
 | `GET` | `/api/v1/openapi.json` | OpenAPI 3 schema。 |
 | `GET` | `/api/v1/engines` | Engine 列表。 |
 | `GET` | `/api/v1/agents` | 可调用 Agent 列表。 |
 | `POST` | `/api/v1/agents/:agentId/invoke` | 一条 SSE 连接内调用 Agent（推荐）。 |
 | `GET` | `/api/v1/environments` | Environment 状态、manifest 和漂移信息。 |
+| `GET/POST` | `/api/v1/environment-templates` | 列出或创建不可变 config-only Environment 模板。 |
+| `POST` | `/api/v1/environment-templates/:templateId/apply` | 创建一个新的 managed Environment 并应用模板；不会复制登录或运行状态。 |
 | `GET` | `/api/v1/projects` | Project 列表。 |
 | `PUT` | `/api/v1/projects/:projectId/agents` | 更新 Project 可调用的 Agent 和默认 Agent。 |
 | `GET` | `/api/v1/sessions` | Session 列表。 |
+| `POST` | `/api/v1/routing/preview` | 只读预览路由候选及拒绝原因；不会创建 Run。 |
 | `GET` | `/api/v1/runs?status=&projectId=&limit=` | Run 列表。 |
 | `POST` | `/api/v1/runs` | 异步创建 Run。 |
 | `GET` | `/api/v1/runs/:runId` | Run 与不可变 snapshot。 |
@@ -56,6 +60,14 @@ Authorization: Bearer <api-token>
 ```
 
 JSON body 至少包含 `task`，也可以带 `projectId`、`sessionId` 和路由要求。响应首先发送不带 sequence 的 `accepted` SSE 事件，其中有 `runId` 与 `eventsUrl`；随后在同一连接持续发送标准 Run 事件直到终态。连接中断时，从 `eventsUrl?stream=sse&after=<last-sequence>` 恢复即可。Agent 已绑定 Environment，因此这个入口不接受 `environmentId`。未声明 SSE `Accept` 的调用返回 `406 SSE_REQUIRED`。
+
+## 预览路由
+
+在提交 Run 前，向 `POST /api/v1/routing/preview` 发送与创建 Run 相同的 JSON 请求体。该端点始终只读，返回 `executes: false`，不会创建 Run。`routing.candidates` 给出每个候选的 `agentId`、`accepted` 和 `reasons`；即使无法路由，响应仍会带顶层 `error` 和可解释的候选拒绝原因。若返回 `ENVIRONMENT_RESCAN_REQUIRED` 或 `ENVIRONMENT_DIRECTORY_INVALID`，先处理 Environment，再创建 Run。
+
+## Agent 健康
+
+`GET /api/v1/agent-health` 是 Control Center 使用的短时缓存读模型。它显示 Engine 配置/Adapter 注册状态、Environment manifest 与 drift、Permission 摘要、Project 默认 binding、最近 Session/Run 和下一步操作。它只读取本地配置、目录和 SQLite 元数据；不会调用原生 Runtime 或解析 Secret Reference。`runtimeHealth: "unknown"` 表示尚未显式探测，使用 `engine health <engine-id>` 检查二进制版本。响应固定包含 `isSecuritySandbox: false`。
 
 ## 创建 Run
 
@@ -108,3 +120,5 @@ Authorization: Bearer <api-token>
 ```
 
 常见状态码：`400` 输入错误、`401` token 错误、`404` 不存在、`409` 路由/幂等/Session 冲突、`413` 请求体过大、`415` 非 JSON、`429` 并发限制。
+
+恢复 Session 的稳定错误码为：`SESSION_AGENT_MISMATCH`、`SESSION_ENGINE_MISMATCH`、`SESSION_ENVIRONMENT_MISMATCH`、`SESSION_ARCHIVED`（HTTP `409`），以及 `SESSION_NOT_FOUND`（HTTP `404`）。Node SDK 将 API code 提供为 `AgentDockClientError.code`。

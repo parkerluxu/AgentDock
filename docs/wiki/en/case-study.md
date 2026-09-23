@@ -1,55 +1,62 @@
-# Plain-language case study: review one repository
+# Plain-language case study: understand one Echo Run
 
-Imagine Alex wants an Agent to answer “Why are this project's tests failing?” Alex does not need to understand every AgentDock term up front.
+Imagine Alex has just opened AgentDock and wants to know how to tell whether it is working. Alex does not need to install a model CLI or learn the whole codebase first. This walkthrough uses built-in Echo to exercise config, routing, a local Run, and history.
 
-## Four simple roles
+## A few simple roles
 
-- **Engine** is the motor: Claude Code or Codex.
-- **Environment** is the desk where the Agent keeps its own settings.
-- **Permission** is the access badge: which files, network, and environment variables are allowed.
-- **Project** is the room: which repository and Agents belong to the task.
+- Engine: how work executes. Echo is built in for demos; real use can select Codex or Claude Code.
+- Agent: a selectable identity that binds an Engine, Environment, and Permission.
+- Environment: the Agent's own config, state, and cache directories.
+- Project: the working directory and the Agents allowed to use it.
+- Permission: AgentDock's application-level filesystem, network, and environment-variable policy.
+- Run: one task record with a frozen config snapshot, events, and final status.
 
-A Run is an operation record. Before starting, AgentDock takes a snapshot of the motor, desk, badge, and repository location; afterwards it stores the steps and outcome.
+## Step 1: install dependencies and build core
 
-## Step 1: prepare
+From the repository root:
 
-```text
+~~~powershell
 npm ci
-npm run build
-npm run config:validate -- examples/config.example.json
-node dist/cli.js doctor --config examples/config.example.json
-```
+npm run build --workspace agentdock
+node .\packages\core\dist\cli.js config validate .\packages\core\examples\config.quickstart.json
+~~~
 
-If Alex has no real Runtime, the deterministic Echo Adapter can be installed for a no-model demo.
+The starter config uses isolated quickstart-data, does not overwrite .agentdock/config.json, and does not require a separate Echo package.
 
 ## Step 2: preview the route
 
-```text
-node dist/cli.js run dry-run --config examples/config.example.json --project agentdock "find why the tests fail"
-```
+~~~powershell
+node .\packages\core\dist\cli.js run dry-run --config .\packages\core\examples\config.quickstart.json --agent echo-agent --project agentdock-demo "Inspect this project"
+~~~
 
-This is like checking a map before leaving: AgentDock reports the selected Agent, Environment, working directory, network policy, and write policy. It does not start a model.
+Alex can see the selected Agent, Engine, Environment, Project working directory, and permissions. A dry-run only resolves the route; it does not start an Agent or write a Run.
 
-## Step 3: execute
+## Step 3: execute a safe local Run
 
-```text
-node dist/cli.js run execute --config examples/config.example.json --environment claude-code-home "find why the tests fail"
-```
+~~~powershell
+node .\packages\core\dist\cli.js run execute --config .\packages\core\examples\config.quickstart.json --agent echo-agent --project agentdock-demo "Hello, AgentDock"
+node .\packages\core\dist\cli.js run list --config .\packages\core\examples\config.quickstart.json
+~~~
 
-The terminal prints JSONL events. Alex only needs to keep the Run ID, like a tracking number.
+Echo returns the input as a message; it does not understand repository contents or call a model. The first execution creates SQLite history and a managed Environment under .agentdock/quickstart-data/. Save the Run ID to inspect it later with run show and run events.
 
-## Step 4: inspect in the UI
+## Step 4: inspect it in the UI
 
 In another terminal:
 
-```text
-node dist/cli.js api serve --config examples/config.example.json --port 4177
-```
+~~~powershell
+node .\packages\core\dist\cli.js api serve --config .\packages\core\examples\config.quickstart.json --port 4177
+~~~
 
-Open `http://127.0.0.1:4177/`, enter the token, filter the Overview by the `agentdock` Project, and select the new Run. Read the snapshot first, then the event timeline. If Alex changes a Permission, the UI previews and saves it; safe changes are hot-reloaded, and old Run snapshots remain unchanged.
+Open http://127.0.0.1:4177/ and retrieve the local API token as described in the startup output. Select Project agentdock-demo in the overview, then open the Run snapshot and event timeline.
 
-## Step 5: automate later
+## To actually investigate test failures
 
-CI can submit `POST /api/v1/runs` and consume `GET /api/v1/runs/<run-id>/events?stream=sse`. Save the last event sequence and reconnect with `after=<sequence>` if needed.
+Echo only checks installation, routing, Run, and history flows. To read or modify a real repository, install and sign in to Codex CLI or Claude Code separately, enable its Engine/Agent in AgentDock, and set the Project rootDir to the intended repository. Run doctor, Engine health, and dry-run before a real execution; real calls may consume model quota. See [Installation and quick start](./getting-started) and [Configuration](./configuration).
 
-The practical lesson is simple: preview first, keep the Project boundary explicit, use the UI for understanding, and use CLI/API for execution and automation.
+## Takeaways
+
+1. An Engine is an execution method; an Agent combines Engine, Environment, and Permission.
+2. Project rootDir selects the working directory; AgentDock does not infer it from the terminal.
+3. Preview routing and permissions before deciding to run a real Agent.
+4. Runs and SQLite history help with review; the starter data is isolated from default data.

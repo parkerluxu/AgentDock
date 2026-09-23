@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { validateConfig } from "../src/config/load.js";
-import { resolveRoute, RouteResolutionError } from "../src/runtime/router.js";
+import { explainRoute, resolveRoute, RouteResolutionError } from "../src/runtime/router.js";
 
 function createConfig() {
   return validateConfig({
@@ -31,7 +31,7 @@ describe("deterministic route resolver", () => {
       engineHealth: { network: "healthy" },
     });
     expect(decision).toMatchObject({ mode: "explicit_environment", environmentId: "network-write", engineId: "network" });
-    expect(decision.candidates).toEqual([{ environmentId: "network-write", engineId: "network", health: "healthy", accepted: true, reasons: [] }]);
+    expect(decision.candidates).toEqual([{ agentId: "network-write", environmentId: "network-write", engineId: "network", health: "healthy", accepted: true, reasons: [] }]);
   });
 
   it("uses a Project default before considering other candidates", () => {
@@ -58,5 +58,16 @@ describe("deterministic route resolver", () => {
     expect(() => resolveRoute(createConfig(), { environmentId: "fast-readonly", engineHealth: { fast: "unhealthy" } })).toThrow(/unhealthy/);
     expect(() => resolveRoute(createConfig(), { environmentId: "disabled-profile" })).toThrow(/disabled/);
     expect(() => resolveRoute(createConfig(), { environmentId: "fast-readonly", requirements: { requiredCapabilities: ["stream_events"] } })).toThrow(/stream_events/);
+  });
+
+  it("returns a non-throwing route explanation with Agent identities and rejection reasons", () => {
+    const explanation = explainRoute(createConfig(), { projectId: "app", requirements: { network: "allow" } });
+    expect(explanation).toMatchObject({
+      resolved: false,
+      error: { code: "NO_ROUTE_CANDIDATE" },
+      candidates: expect.arrayContaining([
+        expect.objectContaining({ agentId: "fast-readonly", environmentId: "fast-readonly", accepted: false, reasons: ["Network permission does not match"] }),
+      ]),
+    });
   });
 });

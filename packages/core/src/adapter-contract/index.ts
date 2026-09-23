@@ -43,6 +43,29 @@ export interface AdapterManifest {
   };
   capabilities: RuntimeCapability[];
   requiredPermissions: AdapterPermission[];
+  /**
+   * Declarative native-home behavior used by Environment doctor and release
+   * compatibility records. Optional for third-party adapter compatibility,
+   * but built-in native CLI adapters must publish it.
+   */
+  nativeHome?: AdapterNativeHomeContract;
+}
+
+export type NativeHomeMutableDirectory = "config" | "state" | "cache" | "session";
+
+export interface AdapterNativeHomeContract {
+  contractVersion: 1;
+  /** Native Runtime variables that select the complete home or its partitions. */
+  homeEnvironmentVariables: string[];
+  configEnvironmentVariables: string[];
+  stateEnvironmentVariables: string[];
+  cacheEnvironmentVariables: string[];
+  /** Directory categories the native Runtime may change during a Run. */
+  mutableDirectories: NativeHomeMutableDirectory[];
+  /** Native CLI syntax recorded without secrets or actual session IDs. */
+  session?: { createArgument?: string; resumeArgument?: string };
+  /** `verified` is reserved for a documented, low-cost real Runtime smoke test. */
+  verification: "declared" | "verified";
 }
 
 export interface AdapterManifestIssue {
@@ -127,6 +150,7 @@ export function validateAdapterManifest(input: unknown): AdapterManifest {
   }
   const capabilities = validateList(input.capabilities, runtimeCapabilities, "capabilities", issues);
   const permissions = validateList(input.requiredPermissions, adapterPermissions, "requiredPermissions", issues);
+  if (input.nativeHome !== undefined) validateNativeHomeContract(input.nativeHome, issues);
 
   if (version !== undefined && !isSemver(version)) {
     issues.push({ path: "version", message: "must be a semantic version such as 0.1.0." });
@@ -134,6 +158,40 @@ export function validateAdapterManifest(input: unknown): AdapterManifest {
   if (issues.length > 0) throw new AdapterManifestValidationError(issues);
 
   return input as unknown as AdapterManifest;
+}
+
+function validateNativeHomeContract(value: unknown, issues: AdapterManifestIssue[]): void {
+  if (!isRecord(value)) {
+    issues.push({ path: "nativeHome", message: "must be an object." });
+    return;
+  }
+  if (value.contractVersion !== 1) issues.push({ path: "nativeHome.contractVersion", message: "must be 1." });
+  for (const key of ["homeEnvironmentVariables", "configEnvironmentVariables", "stateEnvironmentVariables", "cacheEnvironmentVariables"] as const) {
+    if (!Array.isArray(value[key]) || value[key].some((item) => typeof item !== "string" || !/^[A-Z][A-Z0-9_]*$/u.test(item))) {
+      issues.push({ path: `nativeHome.${key}`, message: "must be an array of uppercase environment variable names." });
+    } else if (new Set(value[key]).size !== value[key].length) {
+      issues.push({ path: `nativeHome.${key}`, message: "must not contain duplicates." });
+    }
+  }
+  const mutableDirectories = ["config", "state", "cache", "session"] as const;
+  if (!Array.isArray(value.mutableDirectories) || value.mutableDirectories.some((item) => typeof item !== "string" || !mutableDirectories.includes(item as NativeHomeMutableDirectory))) {
+    issues.push({ path: "nativeHome.mutableDirectories", message: "contains an unsupported directory category." });
+  } else if (new Set(value.mutableDirectories).size !== value.mutableDirectories.length) {
+    issues.push({ path: "nativeHome.mutableDirectories", message: "must not contain duplicates." });
+  }
+  if (value.verification !== "declared" && value.verification !== "verified") {
+    issues.push({ path: "nativeHome.verification", message: "must be \"declared\" or \"verified\"." });
+  }
+  if (value.session !== undefined) {
+    if (!isRecord(value.session)) issues.push({ path: "nativeHome.session", message: "must be an object." });
+    else {
+      for (const key of ["createArgument", "resumeArgument"] as const) {
+        if (value.session[key] !== undefined && (typeof value.session[key] !== "string" || value.session[key].trim().length === 0)) {
+          issues.push({ path: `nativeHome.session.${key}`, message: "must be a non-empty string." });
+        }
+      }
+    }
+  }
 }
 
 export function isValidAdapterManifest(input: unknown): input is AdapterManifest {

@@ -11,7 +11,7 @@ Use Node.js `22.5` or newer, then rerun `npm ci` and `npm run build`.
 ## Configuration errors
 
 ```text
-npm run config:validate -- <config-path>
+node packages/core/dist/cli.js config validate <config-path>
 ```
 
 Check lowercase IDs, existing Engine/Environment/Permission references, Project defaults, external Environment directories, and inheritance cycles.
@@ -19,9 +19,9 @@ Check lowercase IDs, existing Engine/Environment/Permission references, Project 
 ## Missing Adapter or unhealthy Runtime
 
 ```text
-node dist/cli.js engine list --config <config-path>
-node dist/cli.js engine health <engine-id> --config <config-path>
-node dist/cli.js doctor --config <config-path>
+node packages/core/dist/cli.js engine list --config <config-path>
+node packages/core/dist/cli.js engine health <engine-id> --config <config-path>
+node packages/core/dist/cli.js doctor --config <config-path>
 ```
 
 Confirm the Adapter is installed/enabled and the configured binary is available on PATH.

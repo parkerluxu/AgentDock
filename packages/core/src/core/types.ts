@@ -22,6 +22,7 @@ export interface RunRouteSnapshot {
   environmentId: Id;
   engineId?: Id;
   candidates: Array<{
+    agentId?: Id;
     environmentId: Id;
     engineId: Id;
     health: "healthy" | "unknown" | "unhealthy";

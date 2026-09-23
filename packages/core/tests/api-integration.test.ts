@@ -508,6 +508,16 @@ describe("AgentDock API and Adapter integration", () => {
     try {
       await execFileAsync(process.execPath, [tsxPath, cliPath, "adapter", "install", source, "--config", configPath], { cwd: process.cwd() });
       await execFileAsync(process.execPath, [tsxPath, cliPath, "adapter", "enable", "example-echo", "--config", configPath], { cwd: process.cwd() });
+      const dryRun = await execFileAsync(process.execPath, [tsxPath, cliPath, "agent", "run", "default", "--dry-run", "--project", "workspace", "--config", configPath, "inspect without running"], { cwd: process.cwd(), maxBuffer: 256 * 1024 });
+      expect(JSON.parse(dryRun.stdout) as Record<string, unknown>).toMatchObject({
+        task: "inspect without running",
+        agent: { id: "default", environmentId: "default" },
+        environment: { configHash: null, lastScannedAt: null },
+        permission: { id: "readonly" },
+        project: { id: "workspace" },
+        routing: { mode: "explicit_agent", agentId: "default", environmentId: "default", candidates: [{ agentId: "default", accepted: true, reasons: [] }] },
+        executes: false,
+      });
       let result;
       try {
         result = await execFileAsync(process.execPath, [tsxPath, cliPath, "agent", "run", "default", "--project", "workspace", "--config", configPath, "cli integration"], { cwd: process.cwd(), maxBuffer: 256 * 1024 });
@@ -515,9 +525,30 @@ describe("AgentDock API and Adapter integration", () => {
         const details = error as { stderr?: string; stdout?: string };
         throw new Error(`CLI failed. stdout=${details.stdout ?? ""} stderr=${details.stderr ?? ""}`);
       }
-      const events = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line) as { type: string; payload: Record<string, unknown> });
-      expect(events.at(-1)).toMatchObject({ type: "status", payload: { status: "succeeded" } });
-      expect(events).toEqual(expect.arrayContaining([expect.objectContaining({ payload: { text: "example:cli integration" } })]));
+      const records = result.stdout.trim().split(/\r?\n/).map((line) => JSON.parse(line) as { type: string; event?: { payload: Record<string, unknown> }; status?: string });
+      expect(records[0]).toMatchObject({ type: "accepted", agent: { id: "default" }, project: { id: "workspace" }, session: { id: expect.any(String) }, recovery: { command: "run events" } });
+      expect(records.at(-1)).toMatchObject({ type: "result", status: "succeeded" });
+      expect(records.filter((record) => record.type === "event")).toEqual(expect.arrayContaining([expect.objectContaining({ event: expect.objectContaining({ payload: expect.objectContaining({ text: "example:cli integration" }) }) })]));
+
+      const human = await execFileAsync(process.execPath, [tsxPath, cliPath, "agent", "run", "default", "--format", "human", "--project", "workspace", "--config", configPath, "human integration"], { cwd: process.cwd(), maxBuffer: 256 * 1024 });
+      expect(human.stdout).toContain("accepted for Agent default");
+      expect(human.stdout).toContain("example:human integration");
+      expect(human.stdout).toMatch(/Run .+ succeeded\./u);
+
+      const environment = await new EnvironmentDirectoryManager(config, directory).inspect("default");
+      writeFileSync(join(environment.environment.configDir, "external-change.json"), "changed outside AgentDock\n");
+      await expect(execFileAsync(process.execPath, [tsxPath, cliPath, "agent", "run", "default", "--project", "workspace", "--config", configPath, "must require rescan"], {
+        cwd: process.cwd(),
+        maxBuffer: 256 * 1024,
+      })).rejects.toMatchObject({
+        code: 2,
+        stdout: expect.stringContaining('"code":"ENVIRONMENT_RESCAN_REQUIRED"'),
+      });
+      expect((await new EnvironmentDirectoryManager(config, directory).inspect("default")).readiness).toBe("drifted");
+      const rescanned = await execFileAsync(process.execPath, [tsxPath, cliPath, "environment", "rescan", "default", "--config", configPath], { cwd: process.cwd(), maxBuffer: 256 * 1024 });
+      expect(JSON.parse(rescanned.stdout) as Record<string, unknown>).toMatchObject({ environmentId: "default", configHash: expect.any(String) });
+      const afterRescan = await execFileAsync(process.execPath, [tsxPath, cliPath, "agent", "run", "default", "--project", "workspace", "--config", configPath, "runs after explicit rescan"], { cwd: process.cwd(), maxBuffer: 256 * 1024 });
+      expect(JSON.parse(afterRescan.stdout.trim().split(/\r?\n/u).at(-1) as string)).toMatchObject({ type: "result", status: "succeeded" });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

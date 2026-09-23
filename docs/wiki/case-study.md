@@ -1,85 +1,62 @@
-# 通俗案例：小王审查一次仓库
+# 通俗案例：先用 Echo 看懂一条任务
 
-假设小王想让 Agent “帮我看看这个项目的测试为什么失败”，但他不熟悉 AgentDock。下面把一次完整操作翻译成生活化的步骤。
+假设小王第一次打开 AgentDock，想弄清“我装好以后，该怎么判断它正常工作？”他不需要先安装模型 CLI，也不需要先理解整个代码库。下面用内置 Echo 跑通从配置到历史记录的完整路径。
 
-## 先理解四个角色
+## 先理解几个角色
 
-- **Engine**：像“发动机”，例如 Claude Code 或 Codex。
-- **Environment**：像“工作桌”，放 Agent 自己的配置、插件和状态。
-- **Permission**：像“门禁卡”，规定能看哪些目录、能不能写文件、能不能联网。
-- **Project**：像“任务房间”，规定要在哪个仓库工作、允许哪些 Agent 进入。
+- Engine：执行方式。Echo 是内置演示 Engine；真实使用时可换成 Codex 或 Claude Code。
+- Agent：一个可供选择的工作身份，绑定 Engine、Environment 和 Permission。
+- Environment：Agent 自己的配置、状态与缓存目录。
+- Project：任务的工作目录，以及允许使用哪些 Agent。
+- Permission：AgentDock 应用层的文件、网络和环境变量规则。
+- Run：一次任务记录，包含开始时配置快照、事件和最终状态。
 
-一次 Run 就像一张“操作记录单”：开始前把发动机、工作桌、门禁卡和仓库位置拍照存档，结束后还能查看每一步事件。
+## 第一步：安装依赖并构建 core
 
-## 第一步：准备项目
+从仓库根目录运行：
 
-小王先安装依赖并构建：
-
-```text
+~~~powershell
 npm ci
-npm run build
-npm run config:validate -- examples/config.example.json
-node dist/cli.js doctor --config examples/config.example.json
-```
+npm run build --workspace agentdock
+node .\packages\core\dist\cli.js config validate .\packages\core\examples\config.quickstart.json
+~~~
 
-如果机器没有 Claude Code/Codex，他可以安装 Echo Adapter 做无模型演示：
+入门配置使用独立的 quickstart-data，不会覆盖默认 .agentdock/config.json，也不需要安装单独的 Echo 包。
 
-```text
-node dist/cli.js adapter install examples/adapter-echo --config examples/config.example.json
-node dist/cli.js adapter enable example-echo --config examples/config.example.json
-```
+## 第二步：先预览路线
 
-## 第二步：先问“它会怎么做”
+~~~powershell
+node .\packages\core\dist\cli.js run dry-run --config .\packages\core\examples\config.quickstart.json --agent echo-agent --project agentdock-demo "查看这个项目"
+~~~
 
-小王不急着执行，先 dry-run：
+小王会看到 AgentDock 选择的 Agent、Engine、Environment、Project 工作目录和权限。dry-run 只做解析，不启动 Agent，也不写入 Run。
 
-```text
-node dist/cli.js run dry-run --config examples/config.example.json --project agentdock "找出测试失败的原因"
-```
+## 第三步：执行一次安全的本地 Run
 
-这一步像出发前看导航：AgentDock 会告诉他将使用哪个 Agent、哪个 Environment、哪个工作目录，以及网络和写入是否允许。dry-run 不会启动真实 Agent，也不会消耗模型配额。
+~~~powershell
+node .\packages\core\dist\cli.js run execute --config .\packages\core\examples\config.quickstart.json --agent echo-agent --project agentdock-demo "你好，AgentDock"
+node .\packages\core\dist\cli.js run list --config .\packages\core\examples\config.quickstart.json
+~~~
 
-## 第三步：执行任务
-
-确认路线没问题后：
-
-```text
-node dist/cli.js run execute --config examples/config.example.json --environment claude-code-home "找出测试失败的原因"
-```
-
-终端会连续打印 JSONL 事件。小王不需要读懂每个字段，只要记住最后的 Run ID；它就像快递单号。
+Echo 会把输入作为消息返回，不会理解项目内容，也不会调用模型。第一次执行会创建 .agentdock/quickstart-data/ 下的 SQLite 历史和 managed Environment。保存输出中的 Run ID 后，可以继续用 run show、run events 查看该次执行。
 
 ## 第四步：在网页里查看
 
-另开终端启动 Control Center：
+另开终端运行：
 
-```text
-node dist/cli.js api serve --config examples/config.example.json --port 4177
-```
+~~~powershell
+node .\packages\core\dist\cli.js api serve --config .\packages\core\examples\config.quickstart.json --port 4177
+~~~
 
-打开 `http://127.0.0.1:4177/`，输入启动输出的 token：
+打开 http://127.0.0.1:4177/ 并按启动信息取得本地 API Token。概览页选择 Project agentdock-demo，再打开刚才的 Run 查看快照和事件时间线。
 
-1. 在概览页按 Project 筛选 `agentdock`。
-2. 点击刚才的 Run。
-3. 先看“执行快照”，确认工作目录和 Permission。
-4. 再看事件时间线，了解 Agent 何时开始、调用了什么工具、最后为何成功或失败。
+## 真正分析项目测试失败
 
-如果小王发现配置不合适，例如想禁止写入文件，他进入“配置中心”，修改 Permission，点击“预览变更”并保存。安全变更会立即热加载，下一次 Run 会使用新规则，旧 Run 的快照不会被改写；如果响应提示需要重启，再重启 API。
-
-## 第五步：把结果交给脚本
-
-如果小王想让 CI 读取结果，可以使用 API：
-
-```text
-POST /api/v1/runs
-GET  /api/v1/runs/<run-id>/events?stream=sse
-```
-
-客户端保存最后的事件 sequence，断线后使用 `after=<sequence>` 继续读取，不会因为网络短暂中断而丢失事件。完整客户端见 [`examples/api-client`](https://github.com/parkerluxu/AgentDock/tree/main/examples/api-client)。
+Echo 只适合确认安装、路由、Run 和历史保存链路。要让 Agent 阅读或修改真实仓库，需要另行安装、登录 Codex CLI 或 Claude Code CLI，在 AgentDock 配置里启用对应 Engine/Agent，并为 Project 设置正确 rootDir。开始真实执行前先 doctor、engine health 和 dry-run；真实调用可能消耗模型额度。详见[安装与快速上手](./getting-started)和[配置模型](./configuration)。
 
 ## 这个案例的关键收获
 
-1. 先 dry-run，再 execute，避免“还没看清权限就开跑”。
-2. 用 Project 和 Agent 固定工作范围，不靠每次手写路径。
-3. 用 UI 看快照和事件，用 CLI/API 做执行和自动化。
-4. 修改配置后要预览、保存；安全变更会热加载，历史 Run 仍保持原样。
+1. Engine 是执行方式，Agent 把 Engine、Environment 和 Permission 组合起来。
+2. Project 的 rootDir 决定 Agent 工作目录；AgentDock 不靠启动终端所在目录猜测。
+3. 先 dry-run 检查路由和权限，再决定是否运行真实 Agent。
+4. Run 和 SQLite 历史便于复盘；入门演示数据与默认数据隔离。

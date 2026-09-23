@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "dataDir": "../../../.agentdock/quickstart-data",
+  "engines": [
+    {
+      "id": "echo",
+      "adapter": "echo",
+      "enabled": true,
+      "capabilities": ["execute", "stream_events", "cancel", "healthcheck"]
+    }
+  ],
+  "environments": [
+    {
+      "id": "echo-home",
+      "directoryMode": "managed",
+      "settings": {}
+    }
+  ],
+  "environmentPermissions": [
+    {
+      "id": "local-readonly",
+      "filesystem": { "roots": ["."], "write": false },
+      "environment": { "allow": [] },
+      "network": "deny"
+    }
+  ],
+  "agents": [
+    {
+      "id": "echo-agent",
+      "engineId": "echo",
+      "environmentId": "echo-home",
+      "permissionId": "local-readonly",
+      "enabled": true,
+      "processEnv": {},
+      "settings": {}
+    }
+  ],
+  "projects": [
+    {
+      "id": "agentdock-demo",
+      "rootDir": "../../..",
+      "agentIds": ["echo-agent"],
+      "defaultAgentId": "echo-agent"
+    }
+  ]
+}

@@ -1,44 +1,40 @@
 # DeepSeek Harness 集成
 
-AgentDock 可以作为 DeepSeek Harness（DSH）的 agent 后端使用。DSH 继续提供聊天 UI、消息记录和会话切换；AgentDock 负责将每个会话路由到已配置的 Codex、Claude Code 或其他本机 agent。
+AgentDock 可作为 DeepSeek Harness（DSH）的 Agent 后端。DSH 提供聊天 UI；AgentDock 负责把消息路由到本机已配置的 Agent。DSH 模型选择器会列出启用的 Agent，每个 DSH 会话拥有独立的 AgentDock Session。
 
-## 会话绑定
+## 插件安装流程
 
-安装插件后，打开 DSH 的 **Settings → AgentDock**。页面顶部的 **Current DSH session** 区域显示当前聊天会话；选择 AgentDock agent（可选 Project）并点击 **Bind session**。
+准备 Node.js >=22.5、npm、AgentDock 源码仓库和可运行的 DSH Web profile。真实模型执行还需要安装并登录 Codex 或 Claude Code 等 Agent CLI；只验证插件连通性可用内置 Echo。
 
-绑定会将该 DSH 会话的下一次模型调用切换到 `agentdock/bound`。之后的用户消息流程是：
+在 AgentDock 仓库根目录打包，并安装到 DSH 的 web profile：
 
-```text
-DSH 会话 → AgentDock DSH adapter → 本机 AgentDock API → 已绑定 agent → Codex / Claude Code / …
-```
-
-每个 DSH session 都有独立的 AgentDock binding 和 AgentDock native session，因此不同 DSH 会话可使用不同 agent，且不会共享底层上下文。变更绑定目标会创建新的后端 session；解绑后，请在 DSH 中选择其他模型再发送消息。
-
-## 启动条件
-
-先构建 AgentDock，启动本机 API，并在 DSH 的启动环境中提供同一个 token：
-
-```powershell
-npm run build --workspace agentdock
-$env:AGENTDOCK_API_TOKEN = 'replace-with-a-long-random-token'
-node .\packages\core\dist\cli.js api serve --config .\.agentdock\config.json --port 4177
-```
-
-Token 仅通过环境变量读取，不会写入 DSH profile、AgentDock 配置或会话绑定文件。默认 API 地址是 `http://127.0.0.1:4177`。
-
-## 安装插件
-
-```powershell
-npm run build --workspace @agentdock/dsh
+~~~powershell
+npm ci
+npm run build
 npm pack --workspace @agentdock/dsh
-npx @deepseek-ai/dsh plugin --profile web add -w C:\path\to\agentdock-dsh-0.1.3-dev.tgz
+npx @deepseek-ai/dsh plugin --profile web add -w .\agentdock-dsh-0.1.3-dev.tgz
+npx @deepseek-ai/dsh --profile web --dump-config
+~~~
+
+使用 npm pack 实际打印的 tarball 文件名；版本变化时文件名也会变化。dump-config 中应包含 agentdock-dsh。插件包自包含，不会从 npm registry 下载未发布的 AgentDock core 包。
+
+API 和 DSH 需要分开启动。终端 A 启动 AgentDock API 并设置随机本地 Token：
+
+~~~powershell
+$env:AGENTDOCK_API_TOKEN = [guid]::NewGuid().ToString('N')
+$env:AGENTDOCK_API_TOKEN
+node .\packages\core\dist\cli.js api serve --config .\.agentdock\config.json --port 4177
+~~~
+
+复制显示的 Token，在终端 B 设置相同值并启动 DSH：
+
+~~~powershell
+$env:AGENTDOCK_API_TOKEN = '粘贴终端 A 的 token'
 npx @deepseek-ai/dsh web
-```
+~~~
 
-`@agentdock/dsh` 依赖独立发布的 `agentdock` 核心包。发布或安装 DSH 适配器前，须先提供兼容版本的核心包。
+从模型选择器选一个 AgentDock Agent 后发送消息即可。API 只监听 127.0.0.1；Token 只保留在两个进程环境中，不写进 profile 或业务配置。若用不同的业务配置文件，API 和插件的 configPath 都要指向该文件，可在 DSH profile 的 cordis.patch.yml 设置；匹配同一插件 ID 时要完整保留 configPath、apiBaseUrl、apiTokenEnv 和 bindingStorePath。具体 patch、升级、卸载步骤见[完整 DSH 插件指南](https://github.com/parkerluxu/AgentDock/blob/main/docs/dsh-plugin.zh-CN.md)。
 
-插件会在 DSH 当前目录下使用 `.agentdock/dsh-session-bindings.json` 保存 DSH → AgentDock session 映射。`apiBaseUrl`、`apiTokenEnv`、`bindingStorePath` 和 `defaultAgentId` 是插件启动参数，必须在 profile 的 `cordis.patch.yml` 修改，而不是 DSH GUI。该文件按 id 替换整个 config，因此覆盖时必须重述所有字段。Settings → AgentDock 编辑的是 `configPath` 指向的 AgentDock 业务配置。
+Settings → AgentDock 页面可编辑 Agent、Engine、Environment、Project 和 Permission，并调整当前 DSH 会话绑定。它编辑 configPath 指向的业务配置；连接地址、Token 环境变量和绑定文件路径属于 profile 启动参数。
 
-## 额外能力
-
-同一 Settings 页面也能安全编辑 AgentDock 的 Agent、Engine、Environment、Project 和 Permission 配置；保存前会做策略校验、风险提示和备份。
+DSH 会在其启动目录下创建 .agentdock/dsh-session-bindings.json；AgentDock 数据库和 Environment 文件则使用业务配置中的 dataDir。

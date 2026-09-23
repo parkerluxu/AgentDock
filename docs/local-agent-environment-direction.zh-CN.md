@@ -87,6 +87,23 @@ Accept: text/event-stream
 
 `POST /runs` 继续作为底层显式异步接口，服务 CI 队列、批处理和长期任务；不是普通 UI/上游业务的默认入口。
 
+### DSH 一键启动：Token 留在启动器内部
+
+DSH 是 AgentDock 的聊天入口之一，但普通用户不应手动启动 API、寻找 `api-token` 文件，或把 `AGENTDOCK_API_TOKEN` 写入自己的终端环境。提供高层命令：
+
+```text
+agentdock dsh start --config .agentdock/config.json
+```
+
+启动器按以下规则工作：
+
+1. 检查指定配置对应的本机 AgentDock API 是否已健康运行；未运行时启动受管的仅回环 API，已运行时复用它。
+2. 从 API 受控生成或保存的本机 token 位置读取 token，不在屏幕、DSH profile、AgentDock 业务配置、聊天记录或日志中输出 token。
+3. 启动 DSH 子进程，并仅将 `AGENTDOCK_API_TOKEN` 注入该子进程环境；不修改调用者的 PowerShell/CMD 环境，也不要求用户复制粘贴 token。
+4. 清楚报告复用或新启动的 API 地址、DSH 进程状态与可操作的故障原因；仅在启动器拥有该 API 进程时负责其退出清理。
+
+这不是放宽回环 API 的认证边界：Bearer token 仍是同机进程间的最小认证措施；变化只是把凭证传递封装到可信的本地启动链中。
+
 ## 5. 实施顺序
 
 ### P0：收敛语义和安全边界（短迭代）
@@ -103,8 +120,9 @@ Accept: text/event-stream
 - 增加 `agent run` CLI 和本地 SDK 的自动订阅/重连封装。
 - 增加 `POST /agents/{agentId}/invoke` SSE 便利入口，复用现有 RunService、事件序列、幂等和取消实现。
 - 在 Control Center 中以 Agent 为主视图显示其 Engine、Environment 健康、绑定 Project 和最近 Session/Run。
+- 增加 `agentdock dsh start`，自动管理本机 API 的复用/启动，并只向它启动的 DSH 子进程注入 API token。
 
-**验收**：上游应用只需一次调用即可持续接收 Agent 输出；不需要自己实现轮询或 SSE 断线续传，同时仍能获得 `runId` 用于审计和取消。
+**验收**：上游应用只需一次调用即可持续接收 Agent 输出；不需要自己实现轮询或 SSE 断线续传，同时仍能获得 `runId` 用于审计和取消。通过 DSH 使用 AgentDock 时，用户只需执行一条启动命令，不需要接触或持久化 API token。
 
 ### P2：完善本地 Environment 生命周期（后续迭代）
 

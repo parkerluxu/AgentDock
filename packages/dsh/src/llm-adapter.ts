@@ -1,5 +1,5 @@
 import { LlmAdapter, LlmError, type GenerateOptions, type LlmModelInfo, type LlmProviderInfo, type StreamChunk } from "@deepseek-ai/dsh-llm";
-import { AgentDockGateway, AgentDockGatewayError } from "./gateway.js";
+import { agentIdFromModelId, AgentDockGateway, AgentDockGatewayError, modelIdForAgent } from "./gateway.js";
 
 /**
  * Makes AgentDock a normal DSH provider. DSH remains responsible for transcript
@@ -13,8 +13,29 @@ export class AgentDockLlmAdapter extends LlmAdapter {
     return { id: provider, name: "AgentDock" };
   }
 
-  public override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
-    return Promise.resolve([{ provider, id: "bound", name: "Bound AgentDock agent", description: "Uses this DSH session's AgentDock binding." }]);
+  public override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+    const legacy: LlmModelInfo = {
+      provider,
+      id: "bound",
+      name: "Manually bound AgentDock agent",
+      description: "Compatibility option for a route configured in AgentDock Settings.",
+    };
+    try {
+      const catalog = await this.gateway.catalog();
+      const agents = catalog.agents
+        .filter((agent) => agent.enabled)
+        .map((agent): LlmModelInfo => ({
+          provider,
+          id: modelIdForAgent(agent.id),
+          name: agent.id,
+          description: `AgentDock · ${agent.engineId} · ${agent.environmentId}`,
+        }));
+      return [...agents, legacy];
+    } catch {
+      // Keep established manually bound conversations selectable while the local
+      // AgentDock API is starting or temporarily unavailable.
+      return [legacy];
+    }
   }
 
   public override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
@@ -28,7 +49,8 @@ export class AgentDockLlmAdapter extends LlmAdapter {
     let output = "";
     let terminal: string | undefined;
     try {
-      for await (const event of this.gateway.invoke(String(dshSessionId), task, options.signal)) {
+      const selectedAgentId = agentIdFromModelId(options.model);
+      for await (const event of this.gateway.invoke(String(dshSessionId), task, options.signal, selectedAgentId)) {
         const text = responseText(event.payload);
         if (text !== undefined) {
           if (!opened) {

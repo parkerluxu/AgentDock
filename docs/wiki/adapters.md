@@ -4,6 +4,8 @@ Adapter 是 Runtime 与 AgentDock 控制面之间的稳定边界。Adapter 不�
 
 ## 最小契约
 
+内置 Echo Adapter 已随 core 直接注册，适合无模型快速体验，不需要执行 adapter install。packages/core/examples/adapter-echo 是另一个独立的本地示例包，用于学习第三方 Adapter 的 manifest 与入口结构。
+
 Adapter 必须提供：
 
 - `manifest`：声明 `agentDockApi: "v1"`、Runtime 版本范围、能力和权限。
@@ -37,18 +39,18 @@ adapter install → 默认 disabled → adapter enable --grant ... → Registry 
 ```
 
 ```text
-node dist/cli.js adapter install ./my-adapter --config .agentdock/config.json
-node dist/cli.js adapter list --config .agentdock/config.json
-node dist/cli.js adapter enable my-adapter --grant filesystem.read --config .agentdock/config.json
-node dist/cli.js adapter disable my-adapter --config .agentdock/config.json
-node dist/cli.js adapter uninstall my-adapter --config .agentdock/config.json
+node packages/core/dist/cli.js adapter install ./my-adapter --config .agentdock/config.json
+node packages/core/dist/cli.js adapter list --config .agentdock/config.json
+node packages/core/dist/cli.js adapter enable my-adapter --grant filesystem.read --config .agentdock/config.json
+node packages/core/dist/cli.js adapter disable my-adapter --config .agentdock/config.json
+node packages/core/dist/cli.js adapter uninstall my-adapter --config .agentdock/config.json
 ```
 
 包文件复制到数据目录附近的 `adapters/<name>`，注册信息位于 `adapters/registry.json`。安装后默认禁用且没有已授予权限；启用时必须逐项授予 manifest 声明的权限，禁用后才能卸载。内置 Adapter 不能被本地包覆盖。
 
 ## 开发与契约测试
 
-从 [`examples/adapter-echo`](https://github.com/parkerluxu/AgentDock/tree/main/examples/adapter-echo) 开始，使用 SDK 工具创建 manifest 和事件：
+从 [`packages/core/examples/adapter-echo`](https://github.com/parkerluxu/AgentDock/tree/main/packages/core/examples/adapter-echo) 开始，使用 SDK 工具创建 manifest 和事件：
 
 ```ts
 import { assertAdapterContract } from "agentdock";

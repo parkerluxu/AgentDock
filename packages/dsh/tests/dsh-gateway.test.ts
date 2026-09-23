@@ -50,4 +50,30 @@ describe("AgentDock DSH gateway", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("binds a selected DSH AgentDock model to its unique default Project", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "agentdock-dsh-gateway-"));
+    process.env[tokenKey] = "test-token";
+    const calls: Array<{ path: string; body?: Record<string, unknown> }> = [];
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) as Record<string, unknown> : undefined;
+      calls.push({ path: url.pathname, ...(body === undefined ? {} : { body }) });
+      if (url.pathname.endsWith("/agents")) return Response.json({ agents: [{ id: "reviewer", engineId: "codex", environmentId: "review", enabled: true }] });
+      if (url.pathname.endsWith("/projects")) return Response.json({ projects: [{ id: "repository", defaultAgentId: "reviewer", agentIds: ["reviewer"] }] });
+      if (url.pathname.endsWith("/sessions")) return Response.json({ session: { id: "native-review-session" } }, { status: 201 });
+      if (url.pathname.endsWith("/agents/reviewer/invoke")) {
+        return new Response("event: status\ndata: {\"runId\":\"run-2\",\"sequence\":1,\"timestamp\":\"2026-01-01T00:00:00.000Z\",\"type\":\"status\",\"payload\":{\"status\":\"succeeded\"}}\n\n", { headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response("not found", { status: 404 });
+    };
+    try {
+      const gateway = new AgentDockGateway({ apiTokenEnv: tokenKey, bindingStorePath: join(directory, "bindings.json") });
+      for await (const _event of gateway.invoke("dsh-session-b", "review", undefined, "reviewer")) { /* consume */ }
+      expect((await gateway.binding("dsh-session-b"))).toMatchObject({ agentId: "reviewer", projectId: "repository", agentDockSessionId: "native-review-session" });
+      expect(calls.find((call) => call.path.endsWith("/sessions"))?.body).toMatchObject({ agentId: "reviewer", projectId: "repository" });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

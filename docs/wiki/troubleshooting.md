@@ -11,7 +11,7 @@ node --version
 ## 配置校验失败
 
 ```text
-npm run config:validate -- <config-path>
+node packages/core/dist/cli.js config validate <config-path>
 ```
 
 检查：
@@ -25,9 +25,9 @@ npm run config:validate -- <config-path>
 ## Adapter 未注册或 Runtime 不健康
 
 ```text
-node dist/cli.js engine list --config <config-path>
-node dist/cli.js engine health <engine-id> --config <config-path>
-node dist/cli.js doctor --config <config-path>
+node packages/core/dist/cli.js engine list --config <config-path>
+node packages/core/dist/cli.js engine health <engine-id> --config <config-path>
+node packages/core/dist/cli.js doctor --config <config-path>
 ```
 
 确认 `engines[].adapter` 拼写正确，第三方 Adapter 已安装且启用，并确认 `engines[].binary` 在 PATH 中可执行。
@@ -67,7 +67,7 @@ Authorization: Bearer <token>
 换一个端口，或让系统分配：
 
 ```text
-node dist/cli.js api serve --config .agentdock/config.json --port 0
+node packages/core/dist/cli.js api serve --config .agentdock/config.json --port 0
 ```
 
 实际端口会出现在启动 JSON 的 `port` 字段。

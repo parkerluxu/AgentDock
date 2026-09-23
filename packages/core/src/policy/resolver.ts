@@ -1,6 +1,6 @@
 import { isAbsolute, relative, resolve, win32 } from "node:path";
 import type { AgentDockConfig, ConfigEnvironment } from "../config/schema.js";
-import type { Agent, AgentEnvironment, EnvironmentPermission, ExecutionContext, Project, SecretReference } from "../core/types.js";
+import type { Agent, AgentEnvironment, EnvironmentPermission, ExecutionContext, Project, RunRouteSnapshot, SecretReference } from "../core/types.js";
 import { configuredAgents } from "../config/model.js";
 import { toRuntimeDescriptor } from "../runtime/configuration.js";
 import { readEnvironmentManifestSync, resolveEnvironmentDirectories } from "../environment/manager.js";
@@ -75,6 +75,6 @@ function assertSafeProcessEnvironment(values: Record<string, string>, agentId: s
   }
 }
 
-export function formatDryRun(context: ExecutionContext, task: string): Record<string, unknown> {
-  return { task, agent: context.agent ? { id: context.agent.id, engineId: context.agent.engineId, environmentId: context.agent.environmentId, permissionId: context.agent.permissionId } : undefined, engine: { id: context.engine.id, adapter: context.engine.adapter, binary: context.engine.binary, args: context.engine.args, capabilities: context.engine.capabilities }, environment: { ...context.agentEnvironment, configHash: context.environmentManifest?.configHash }, project: context.project ? { id: context.project.id, rootDir: context.project.rootDir } : undefined, permission: { id: context.environmentPermission.id, filesystem: context.environmentPermission.filesystem, network: context.environmentPermission.network }, workingDirectory: context.workingDirectory, environmentKeys: Object.keys(context.environment).sort(), inheritedEnvironmentKeys: context.allowedEnvironmentKeys, secretReferenceKeys: Object.keys(context.secretReferences).sort(), executes: false };
+export function formatDryRun(context: ExecutionContext, task: string, routing?: RunRouteSnapshot): Record<string, unknown> {
+  return { task, agent: context.agent ? { id: context.agent.id, engineId: context.agent.engineId, environmentId: context.agent.environmentId, permissionId: context.agent.permissionId } : undefined, engine: { id: context.engine.id, adapter: context.engine.adapter, binary: context.engine.binary, args: context.engine.args, capabilities: context.engine.capabilities }, environment: { ...context.agentEnvironment, configHash: context.environmentManifest?.configHash ?? null, lastScannedAt: context.environmentManifest?.scannedAt ?? null }, project: context.project ? { id: context.project.id, rootDir: context.project.rootDir } : undefined, permission: { id: context.environmentPermission.id, filesystem: context.environmentPermission.filesystem, network: context.environmentPermission.network }, ...(routing ? { routing } : {}), workingDirectory: context.workingDirectory, environmentKeys: Object.keys(context.environment).sort(), inheritedEnvironmentKeys: context.allowedEnvironmentKeys, secretReferenceKeys: Object.keys(context.secretReferences).sort(), executes: false };
 }

@@ -17,6 +17,7 @@
 | 状态 | 含义 | 发布要求 |
 | --- | --- | --- |
 | `supported` | 当前声明版本和测试环境中可重复通过。 | 可写入 manifest 的稳定范围。 |
+| `declared` | Adapter 合约和自动化测试已声明命令/目录语义，但没有记录在案的真实 Runtime 冒烟。 | 只能作为诊断提示和 preview 信息；不得宣传为目标平台已验证。 |
 | `version-dependent` | 能力存在，但依赖 Runtime 版本、平台或 Profile 设置。 | 必须写清条件和失败诊断。 |
 | `unsupported` | 当前 Adapter 不提供该能力。 | 不得在路由中声明或伪造。 |
 | `unknown` | 尚未验证。 | 不得作为已兼容版本发布。 |

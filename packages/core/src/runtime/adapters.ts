@@ -99,6 +99,16 @@ export class ClaudeCodeAdapter extends CliAdapter {
     runtime: { id: "claude-code", versionRange: ">=2.1.0" },
     capabilities: ["execute", "stream_events", "cancel", "create_session", "resume_session", "healthcheck"],
     requiredPermissions: ["filesystem.read"],
+    nativeHome: {
+      contractVersion: 1,
+      homeEnvironmentVariables: ["CLAUDE_CONFIG_DIR"],
+      configEnvironmentVariables: ["CLAUDE_CONFIG_DIR"],
+      stateEnvironmentVariables: [],
+      cacheEnvironmentVariables: [],
+      mutableDirectories: ["config", "cache", "session"],
+      session: { createArgument: "--session-id <id>", resumeArgument: "--resume <id>" },
+      verification: "declared",
+    },
   });
 
   protected binary(): string {
@@ -139,6 +149,16 @@ export class CodexAdapter extends CliAdapter {
     runtime: { id: "codex", versionRange: ">=0.147.0" },
     capabilities: ["execute", "stream_events", "cancel", "resume_session", "healthcheck"],
     requiredPermissions: ["filesystem.read"],
+    nativeHome: {
+      contractVersion: 1,
+      homeEnvironmentVariables: ["CODEX_HOME"],
+      configEnvironmentVariables: ["CODEX_HOME"],
+      stateEnvironmentVariables: [],
+      cacheEnvironmentVariables: [],
+      mutableDirectories: ["config", "cache", "session"],
+      session: { resumeArgument: "exec resume <thread-id>" },
+      verification: "declared",
+    },
   });
 
   protected binary(): string {

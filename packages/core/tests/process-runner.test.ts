@@ -63,13 +63,16 @@ describe("ProcessRunner", () => {
     const runner = new ProcessRunner();
     const execution = runner.execute({
       command: "npm",
-      args: ["exec", "--yes", "--", "node", "-e", "console.log(process.argv[1])", "hello world"],
+      // npm config prints every requested key. A key containing a space makes
+      // this an assertion about the shim's argument quoting, without relying
+      // on npm exec's package-resolution behavior across npm versions.
+      args: ["--workspaces=false", "config", "get", "user-agent", "hello world"],
       cwd: process.cwd(),
       env: { PATH: process.env.PATH ?? "", SystemRoot: process.env.SystemRoot ?? "" },
       timeoutMs: 15_000,
     });
     const result = await collectProcessOutput(execution);
     expect(result.exit.code).toBe(0);
-    expect(result.stdout.trim()).toBe("hello world");
+    expect(result.stdout).toContain("hello world=undefined");
   });
 });

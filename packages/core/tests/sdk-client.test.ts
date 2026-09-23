@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Run } from "../src/core/types.js";
-import { AgentDockClient } from "../src/sdk/client.js";
+import { AgentDockClient, AgentDockClientError } from "../src/sdk/client.js";
 
 function streamResponse(frames: string[], fail = false): Response {
   const encoder = new TextEncoder();
@@ -59,5 +59,40 @@ describe("AgentDock local SDK", () => {
     expect(calls.map((call) => call.method)).toEqual(["POST", "GET", "GET"]);
     expect(calls[0]?.idempotencyKey).toBeTruthy();
     expect(calls[1]?.url).toContain("after=0");
+  });
+
+  it("preserves a stable API error code for callers", async () => {
+    const fetcher: typeof globalThis.fetch = async () => new Response(JSON.stringify({
+      error: { code: "SESSION_ENVIRONMENT_MISMATCH", message: "The Session belongs to another Environment." },
+    }), { status: 409, headers: { "content-type": "application/json" } });
+    const client = new AgentDockClient({ baseUrl: "http://agentdock.test/api/v1", token: "sdk-token", fetch: fetcher, maxReconnects: 0 });
+    await expect(client.agent("reviewer").run({ task: "resume", sessionId: "session-1" })).rejects.toMatchObject({
+      name: "AgentDockClientError",
+      statusCode: 409,
+      code: "SESSION_ENVIRONMENT_MISMATCH",
+    } satisfies Partial<AgentDockClientError>);
+  });
+
+  it("returns a non-mutating routing explanation for an unroutable request", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const fetcher: typeof globalThis.fetch = async (input, init) => {
+      expect(String(input)).toBe("http://agentdock.test/api/v1/routing/preview");
+      requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        task: "inspect",
+        executes: false,
+        routing: {
+          resolved: false,
+          candidates: [{ agentId: "reviewer", environmentId: "review", engineId: "codex", health: "unknown", accepted: false, reasons: ["Network permission does not match"] }],
+          explanation: "No configured Agent can satisfy the requested route.",
+          error: { code: "NO_ROUTE_CANDIDATE", message: "No configured Agent can satisfy the requested route." },
+        },
+        error: { code: "NO_ROUTE_CANDIDATE", message: "No configured Agent can satisfy the requested route." },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const client = new AgentDockClient({ baseUrl: "http://agentdock.test/api/v1", token: "sdk-token", fetch: fetcher });
+    const result = await client.previewRouting({ task: "inspect", projectId: "workspace", network: "allow" });
+    expect(requestBody).toMatchObject({ task: "inspect", projectId: "workspace", network: "allow" });
+    expect(result).toMatchObject({ executes: false, error: { code: "NO_ROUTE_CANDIDATE" } });
   });
 });

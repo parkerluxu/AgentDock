@@ -7,7 +7,7 @@
 | 路径 | 含义 | 谁决定 |
 | --- | --- | --- |
 | PowerShell 当前目录 | 命令启动时所在的位置；不会自动成为 Agent 工作目录。 | 当前 Shell |
-| CLI 入口 | AgentDock 构建后的 `dist/cli.js` 所在位置。 | 绝对路径、`npm link` 或 PATH |
+| CLI 入口 | AgentDock 构建后的 packages/core/dist/cli.js。 | 绝对路径、本地 npm 安装或 PATH |
 | 配置文件路径 | 决定配置中的相对路径、`dataDir` 和 Environment 相对目录。 | `--config` |
 | Project `rootDir` | Agent 实际执行任务时的工作目录。 | 配置中的 Project |
 | Environment home | Agent 的 config/state/cache 和原生配置目录，不是项目工作目录。 | Agent 绑定的 Environment |
@@ -32,8 +32,8 @@ Windows 路径也可以写成 `D:\\work\\other-project`。使用绝对路径时�
 先验证解析结果，不启动真实 Agent：
 
 ```powershell
-node "D:\AI_agent\cases\AgentDock\dist\cli.js" run dry-run `
-  --config "D:\AI_agent\cases\AgentDock\examples\config.example.json" `
+node "D:\AI_agent\cases\AgentDock\packages\core\dist\cli.js" run dry-run `
+  --config "D:\AI_agent\cases\AgentDock\packages\core\examples\config.example.json" `
   --agent new-agent --project other-project hello
 ```
 
@@ -43,19 +43,17 @@ node "D:\AI_agent\cases\AgentDock\dist\cli.js" run dry-run `
 
 ```powershell
 $repo = "D:\AI_agent\cases\AgentDock"
-$config = "$repo\examples\config.example.json"
-node "$repo\dist\cli.js" agent run new-agent --config $config --project other-project hello
+$config = "$repo\packages\core\examples\config.example.json"
+node "$repo\packages\core\dist\cli.js" agent run new-agent --config $config --project other-project hello
 ```
 
-也可以在源码目录执行一次 `npm link`，之后使用全局命令名：
+如果需要全局命令，可从仓库根目录打包并安装 core workspace：
 
 ```powershell
-Push-Location "D:\AI_agent\cases\AgentDock"
-npm link
-Pop-Location
-
+npm pack --workspace agentdock
+npm install --global .\agentdock-0.1.3-dev.tgz
 agentdock agent run new-agent `
-  --config "D:\AI_agent\cases\AgentDock\examples\config.example.json" `
+  --config "D:\AI_agent\cases\AgentDock\packages\core\examples\config.example.json" `
   --project other-project hello
 ```
 
@@ -71,7 +69,7 @@ AgentDock SDK 的源码是 TypeScript，构建后是 ESM JavaScript，并生成 
 
 ```powershell
 $repo = "D:\AI_agent\cases\AgentDock"
-$env:AGENTDOCK_SDK_ENTRY = "$repo\dist\index.js"
+$env:AGENTDOCK_SDK_ENTRY = "$repo\packages\core\dist\index.js"
 $env:AGENTDOCK_API_BASE = "http://127.0.0.1:4177/api/v1"
 $env:AGENTDOCK_API_TOKEN = "replace-with-your-local-api-token"
 
@@ -81,6 +79,19 @@ node --input-type=module -e 'const {pathToFileURL}=await import("node:url"); con
 SDK 的 `projectId` 必须对应配置中的 Project；SDK 当前没有单次调用级别的 `cwd` 或 `workingDirectory` 参数。需要换目录时，增加 Project 并把 `rootDir` 指向目标目录。
 
 `baseUrl` 是 API 服务地址，和 PowerShell 当前目录、Project `rootDir` 彼此独立。Token 只应通过环境变量或其他本地 secret 方式提供，不要提交到配置或源码。
+
+需要先向用户或自动化解释 Agent 选择时，调用只读的 `previewRouting`，而不是先创建 Run：
+
+```js
+const preview = await client.previewRouting({
+  task: "审查当前仓库的测试失败原因",
+  projectId: "agentdock",
+  network: "deny",
+});
+console.log(preview.routing.candidates, preview.error);
+```
+
+该调用始终返回 `executes: false`，不会创建 Run。无可用路由或 Environment 未 ready 时，检查 `preview.error` 和每个候选的 `reasons`；修复后再调用 `client.agent(agentId).run(...)` 或创建 Run。
 
 ## 调用前检查清单
 
