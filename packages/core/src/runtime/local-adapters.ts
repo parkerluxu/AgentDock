@@ -67,8 +67,9 @@ export class LocalAdapterStore {
     const temporaryTarget = join(this.directory, `.install-${randomUUID()}`);
     try {
       cpSync(sourceRoot, temporaryTarget, { recursive: true, force: false, errorOnExist: true });
-      const installedEntry = realFileInside(temporaryTarget, manifest.entry, "manifest.entry");
-      if (installedEntry !== resolve(temporaryTarget, manifest.entry)) {
+      const temporaryRoot = realDirectory(temporaryTarget);
+      const installedEntry = realFileInside(temporaryRoot, manifest.entry, "manifest.entry");
+      if (installedEntry !== resolve(temporaryRoot, manifest.entry)) {
         throw new Error("The installed Adapter entry does not resolve inside the package directory.");
       }
       renameSync(temporaryTarget, target);
@@ -258,7 +259,7 @@ function resolveManifestPath(source: string): { sourceDirectory: string; manifes
 function realDirectory(directory: string): string {
   const resolved = resolve(directory);
   if (!lstatSync(resolved).isDirectory()) throw new Error(`Adapter package root "${resolved}" is not a directory.`);
-  return resolved;
+  return resolvePathWithSymlinks(resolved);
 }
 
 function realFileInside(root: string, entry: string, label: string): string {
@@ -266,7 +267,7 @@ function realFileInside(root: string, entry: string, label: string): string {
   const lexicalPath = resolve(root, entry);
   assertChildPath(root, lexicalPath);
   if (!existsSync(lexicalPath) || !lstatSync(lexicalPath).isFile()) throw new Error(`${label} must point to an existing file.`);
-  const realRoot = resolve(root);
+  const realRoot = resolvePathWithSymlinks(root);
   const realEntry = resolvePathWithSymlinks(lexicalPath);
   assertChildPath(realRoot, realEntry);
   return realEntry;
