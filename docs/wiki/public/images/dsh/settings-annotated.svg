@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1120" role="img" aria-labelledby="title desc">
+  <title id="title">AgentDock DSH Settings 页面结构标注图</title>
+  <desc id="desc">基于插件源码重绘的 AgentDock Settings 页面，标出配置路径、会话绑定、对象分类、JSON 编辑、Preview、Save 和备份。</desc>
+  <defs>
+    <style>
+      text{font-family:"Segoe UI","Microsoft YaHei",sans-serif;fill:#172033}.muted{fill:#596579}.small{font-size:16px}.body{font-size:18px}.label{font-size:17px;font-weight:700}.num{font-size:17px;font-weight:700;fill:#fff}.call{font-size:18px}.terminal{fill:#d1fae5}.whiteText{fill:#fff}
+    </style>
+  </defs>
+  <rect width="1600" height="1120" rx="24" fill="#f3f6fb"/>
+  <text x="52" y="62" font-size="34" font-weight="700">Settings → AgentDock：配置管理区怎么读</text>
+  <text x="52" y="98" class="muted" font-size="19">界面结构示意图，按插件源码重绘；不是实时 DSH 截图，名称和计数取决于你的配置。</text>
+
+  <rect x="48" y="132" width="1015" height="930" rx="18" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="78" y="180" font-size="28" font-weight="700">AgentDock control plane</text>
+  <text x="78" y="211" class="small muted">Manage AgentDock agents, engines, environments, projects, and permissions.</text>
+  <rect x="900" y="158" width="126" height="42" rx="9" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="963" y="185" text-anchor="middle" class="small">↻ Refresh</text>
+  <circle cx="79" cy="250" r="18" fill="#2563eb"/><text x="79" y="256" text-anchor="middle" class="num">1</text>
+  <text x="110" y="256" class="body">Config: <tspan font-family="Consolas,monospace">.../config.quickstart.json</tspan></text>
+
+  <rect x="75" y="282" width="960" height="212" rx="13" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+  <circle cx="105" cy="318" r="18" fill="#7c3aed"/><text x="105" y="324" text-anchor="middle" class="num">2</text>
+  <text x="137" y="325" font-size="22" font-weight="700">Current DSH session</text>
+  <text x="137" y="353" class="small muted">Bind this conversation independently to an AgentDock agent.</text>
+  <text x="98" y="391" class="small muted">AgentDock agent</text>
+  <rect x="98" y="403" width="332" height="45" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="115" y="432" class="body">echo-agent · echo　⌄</text>
+  <text x="455" y="391" class="small muted">Project (optional)</text>
+  <rect x="455" y="403" width="300" height="45" rx="8" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="472" y="432" class="body">agentdock-demo　⌄</text>
+  <rect x="780" y="403" width="220" height="45" rx="8" fill="#15803d"/>
+  <text x="890" y="432" text-anchor="middle" class="body whiteText">Bind session</text>
+  <text x="98" y="475" class="small" fill="#15803d">Bound to echo-agent · backend session ready</text>
+
+  <circle cx="94" cy="535" r="18" fill="#0f766e"/><text x="94" y="541" text-anchor="middle" class="num">3</text>
+  <rect x="123" y="512" width="169" height="73" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="142" y="543" font-size="25" font-weight="700">1</text><text x="142" y="566" class="small">Agents</text>
+  <rect x="306" y="512" width="169" height="73" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="325" y="543" font-size="25" font-weight="700">1</text><text x="325" y="566" class="small">Engines</text>
+  <rect x="489" y="512" width="169" height="73" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="508" y="543" font-size="25" font-weight="700">1</text><text x="508" y="566" class="small">Environments</text>
+  <rect x="672" y="512" width="169" height="73" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="691" y="543" font-size="25" font-weight="700">1</text><text x="691" y="566" class="small">Projects</text>
+  <rect x="855" y="512" width="169" height="73" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="874" y="543" font-size="25" font-weight="700">1</text><text x="874" y="566" class="small">Permissions</text>
+
+  <circle cx="94" cy="628" r="18" fill="#d97706"/><text x="94" y="634" text-anchor="middle" class="num">4</text>
+  <rect x="123" y="608" width="902" height="46" rx="8" fill="#f1f5f9"/>
+  <text x="143" y="638" class="small" font-weight="700">Agents</text><text x="248" y="638" class="small">Engines</text><text x="353" y="638" class="small">Environments</text><text x="493" y="638" class="small">Projects</text><text x="590" y="638" class="small">Permissions</text><text x="742" y="638" class="small">Advanced JSON</text>
+  <rect x="125" y="672" width="900" height="300" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="150" y="710" class="label">Agents catalog</text>
+  <text x="150" y="744" class="small muted">Edit the selected catalog as a JSON array. IDs and references are validated before save.</text>
+  <rect x="150" y="766" width="850" height="175" rx="8" fill="#111827"/>
+  <text x="176" y="803" class="terminal" font-size="17">[</text>
+  <text x="194" y="832" class="terminal" font-size="17">  { "id": "echo-agent", "engineId": "echo",</text>
+  <text x="194" y="861" class="terminal" font-size="17">    "environmentId": "echo-home",</text>
+  <text x="194" y="890" class="terminal" font-size="17">    "permissionId": "local-readonly", "enabled": true }</text>
+  <text x="176" y="919" class="terminal" font-size="17">]</text>
+
+  <circle cx="94" cy="1015" r="18" fill="#db2777"/><text x="94" y="1021" text-anchor="middle" class="num">5</text>
+  <rect x="123" y="988" width="184" height="45" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/><text x="215" y="1017" text-anchor="middle" class="small">Discard changes</text>
+  <rect x="321" y="988" width="153" height="45" rx="8" fill="#f1f5f9" stroke="#cbd5e1"/><text x="398" y="1017" text-anchor="middle" class="small">Preview</text>
+  <rect x="488" y="988" width="238" height="45" rx="8" fill="#15803d"/><text x="607" y="1017" text-anchor="middle" class="small whiteText">Save configuration</text>
+  <text x="748" y="1017" class="small muted">Backups below: inspect / restore</text>
+
+  <rect x="1095" y="145" width="455" height="168" rx="15" fill="#dbeafe"/>
+  <circle cx="1133" cy="184" r="20" fill="#2563eb"/><text x="1133" y="190" text-anchor="middle" class="num">1</text>
+  <text x="1170" y="190" font-size="21" font-weight="700">配置文件路径</text>
+  <text x="1123" y="230" class="call">确认这里是你希望管理的 AgentDock</text><text x="1123" y="258" class="call">JSON；连接地址和 Token 不在这里设置。</text>
+
+  <rect x="1095" y="333" width="455" height="174" rx="15" fill="#ede9fe"/>
+  <circle cx="1133" cy="372" r="20" fill="#7c3aed"/><text x="1133" y="378" text-anchor="middle" class="num">2</text>
+  <text x="1170" y="378" font-size="21" font-weight="700">当前对话路由</text>
+  <text x="1123" y="418" class="call">模型选择器通常会自动绑定；在这里可</text><text x="1123" y="446" class="call">查看或手动改 Agent / Project。每个 DSH</text><text x="1123" y="474" class="call">对话各自维护一条绑定。</text>
+
+  <rect x="1095" y="527" width="455" height="174" rx="15" fill="#ccfbf1"/>
+  <circle cx="1133" cy="566" r="20" fill="#0f766e"/><text x="1133" y="572" text-anchor="middle" class="num">3</text>
+  <text x="1170" y="572" font-size="21" font-weight="700">对象分类 / 数量</text>
+  <text x="1123" y="612" class="call">Agent 引用 Engine、Environment、Permission；</text><text x="1123" y="640" class="call">Project 约束工作目录和可用 Agent。</text><text x="1123" y="668" class="call">有启用 Agent 才会出现在模型选择器。</text>
+
+  <rect x="1095" y="721" width="455" height="174" rx="15" fill="#fef3c7"/>
+  <circle cx="1133" cy="760" r="20" fill="#d97706"/><text x="1133" y="766" text-anchor="middle" class="num">4</text>
+  <text x="1170" y="766" font-size="21" font-weight="700">JSON 编辑区</text>
+  <text x="1123" y="806" class="call">修改的是一个完整分类数组。改完先</text><text x="1123" y="834" class="call">Preview 检查 schema、引用、风险和差异。</text><text x="1123" y="862" class="call">不要留下模板 ID。</text>
+
+  <rect x="1095" y="915" width="455" height="147" rx="15" fill="#fce7f3"/>
+  <circle cx="1133" cy="954" r="20" fill="#db2777"/><text x="1133" y="960" text-anchor="middle" class="num">5</text>
+  <text x="1170" y="960" font-size="21" font-weight="700">安全保存与回滚</text>
+  <text x="1123" y="1000" class="call">Save 前校验并留备份；恢复会替换当前</text><text x="1123" y="1028" class="call">配置。提示重启时，新运行配置尚未生效。</text>
+</svg>
