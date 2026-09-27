@@ -456,7 +456,8 @@ describe("AgentDock API and Adapter integration", () => {
       })));
       expect(responses.every((response) => response.status === 202)).toBe(true);
       const runIds = await Promise.all(responses.map(async (response) => runIdFromBody(await response.json())));
-      await waitFor(() => runIds.every((runId) => isTerminal(store.getRun(runId)?.status)), 3_000);
+      // This SQLite-backed 24-request stress case can exceed Vitest's 5s default on busy Windows CI workers.
+      await waitFor(() => runIds.every((runId) => isTerminal(store.getRun(runId)?.status)), 10_000);
       expect(store.listRuns()).toHaveLength(24);
       for (const runId of runIds) {
         expect(store.getRun(runId)?.status).toBe("succeeded");
@@ -467,7 +468,7 @@ describe("AgentDock API and Adapter integration", () => {
       store.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("turns an Adapter crash into a persisted failed Run and terminal SSE event", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentdock-api-crash-"));
