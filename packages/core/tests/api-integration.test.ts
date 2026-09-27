@@ -499,6 +499,7 @@ describe("AgentDock API and Adapter integration", () => {
     }
   });
 
+  // This end-to-end case starts several sequential CLI child processes, which can exceed 5s on busy Windows CI workers.
   it("runs an enabled example Adapter through the CLI and emits JSONL events", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentdock-cli-integration-"));
     const config = configFor("example-echo", "example-echo", ["execute", "stream_events", "cancel"]);
@@ -553,7 +554,7 @@ describe("AgentDock API and Adapter integration", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 
   it("cancels several active Runs concurrently and persists cancellation for each", async () => {
     const directory = mkdtempSync(join(tmpdir(), "agentdock-api-cancel-"));
